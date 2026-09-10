@@ -1,0 +1,16 @@
+{
+  "automode": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python pretooluse.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

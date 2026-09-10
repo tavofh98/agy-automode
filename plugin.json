@@ -1,0 +1,5 @@
+{
+  "name": "automode",
+  "version": "0.1.0",
+  "description": "Auto mode para agy: aprueba lo seguro, bloquea lo peligroso y consulta a agy en los casos dudosos, con fase de planeación y respaldo git antes de cada cambio."
+}
