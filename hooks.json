@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "python pretooluse.py",
-            "timeout": 15
+            "timeout": 60
           }
         ]
       }

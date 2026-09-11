@@ -16,7 +16,8 @@ llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
 - **Respaldo antes de modificar.** Antes del primer cambio de cada bloque de trabajo guarda
   una captura git del proyecto en `refs/automode/<conversación>`, sin tocar tu índice ni tu
   rama. Las credenciales (`.env`, claves SSH…) quedan fuera de la captura.
-- **Cortacircuitos.** Si el agente insiste en caminos prohibidos, escala la decisión a ti.
+- **Cortacircuitos.** Si el agente insiste en caminos prohibidos, mantiene la denegación y le
+  pide que cambie de enfoque o se detenga a explicarte qué necesita.
 
 ## Requisitos
 
@@ -52,9 +53,52 @@ agy plugin disable automode
 agy plugin enable automode
 ```
 
+**Una sesión sin juez ni respaldo:** lanza agy con la variable `AGY_AUTOMODE=off`. Lo que
+iría al juez se aprueba al instante y no se hace captura git; las líneas rojas se siguen
+aplicando. También deja sin freno la fase de planeación, que depende del juez.
+
+```powershell
+$env:AGY_AUTOMODE = 'off'; agy
+```
+
 **Desinstalar:** `agy plugin uninstall automode`, o borra la carpeta `.agents/plugins/automode`.
 
 > En Linux o macOS, si solo tienes `python3`, cambia `python` por `python3` en `hooks.json`.
+
+## Uso
+
+Lanza agy con `--dangerously-skip-permissions`:
+
+```bash
+agy --dangerously-skip-permissions
+```
+
+Sin esa opción el auto mode decide igual, pero agy te sigue pidiendo confirmación aunque el
+hook apruebe la acción. Con ella, agy respeta las denegaciones del hook y deja de preguntar.
+Si el propio hook falla (política ilegible, llamada que no puede leer), la acción se ejecuta
+sin revisión.
+
+**Atajo `agya`.** Para no escribir la opción cada vez, define un atajo que acepta los mismos
+argumentos que `agy` (por ejemplo, `agya -c`).
+
+En PowerShell, añade esta línea a tu perfil (`notepad $PROFILE`):
+
+```powershell
+function agya { agy --dangerously-skip-permissions @args }
+```
+
+Si al abrir PowerShell aparece «la ejecución de scripts está deshabilitada», permite tus
+scripts locales una sola vez:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+En bash o zsh, añade a `~/.bashrc` o `~/.zshrc`:
+
+```bash
+alias agya='agy --dangerously-skip-permissions'
+```
 
 ## Fases: planear y ejecutar
 

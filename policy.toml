@@ -100,7 +100,9 @@ min_interval_seconds = 300
 
 
 [circuit_breaker]
-# Si el agente insiste en caminos prohibidos, algo va mal: se escala a la persona.
+# Si el agente insiste en caminos prohibidos, algo va mal: la denegación se mantiene y se
+# le pide que cambie de enfoque. No se escala con `force_ask`: sin supervisión agy lo
+# ejecuta igual que un `ask`.
 consecutive_denials = 3
 total_denials = 20
 
@@ -116,6 +118,9 @@ read_only = [
   "list_browser_pages", "capture_browser_console_logs", "read_browser_page",
   # Nombres reales observados en el registro de auditoría de agy.
   "find_by_name", "list_dir", "ask_question", "manage_task",
+  # Temporizador con que el agente vuelve a mirar una tarea en segundo plano. No ejecuta
+  # nada: lo que haga al despertar vuelve a pasar por el hook, llamada por llamada.
+  "schedule",
 ]
 
 # Nivel 2 — escritura. Se aprueban solo si todas las rutas caen dentro del proyecto.
@@ -293,7 +298,10 @@ pattern = '>>?\s*[^|;&]*authorized_keys|ssh-copy-id\b'
 reason = "Añade acceso SSH persistente."
 
 [[commands.blocked]]
-pattern = '\b(?:crontab|schtasks|at)\s|New-ScheduledTask'
+# `at` solo cuenta como comando: al inicio de un segmento y seguido de una hora o un equipo
+# (`at 14:00 ...`, `at \\pc ...`). Sin esa exigencia, "# Look at lines" o "Event at index"
+# dentro de un `python -c` se leían como tareas programadas (conversación 68da1f0a, s36).
+pattern = '\b(?:crontab|schtasks)\b|(?:^|[;&|\n"\x27(]\s*)at\s+(?:\d|\\\\)|New-ScheduledTask'
 reason = "Crea ejecución programada persistente."
 
 [[commands.blocked]]

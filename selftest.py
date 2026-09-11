@@ -98,12 +98,15 @@ CASES_AUTO = [
 ]
 
 CASES_PLAN = [
-    # ── Modo Plan: exploración y python libre, pero edición en código pide confirmación ──
+    # ── Modo Plan: lectura libre; python, edición y comandos con efectos los juzga el clasificador ──
     case("plan: lectura archivo", {"AbsolutePath": f"{ROOT}/main.py"}, "allow", "view_file"),
     case("plan: git status", {"CommandLine": "git status"}, "allow"),
-    case("plan: python exploratorio", {"CommandLine": "python consultas/explorar.py"}, "allow"),
-    case("plan: python -c inline", {"CommandLine": 'python -c "import sys; print(sys.version)"'}, "allow"),
-    case("plan: uv run python", {"CommandLine": "uv run python script.py"}, "allow"),
+    # Python ya no tiene vía rápida: va al clasificador, que aquí (backend "none") no
+    # puede pronunciarse y deniega. `deny` prueba que ninguna regla lo aprueba en seco.
+    case("plan: python exploratorio", {"CommandLine": "python consultas/explorar.py"}, "deny"),
+    case("plan: python -c inline", {"CommandLine": 'python -c "import sys; print(sys.version)"'}, "deny"),
+    case("plan: uv run python", {"CommandLine": "uv run python script.py"}, "deny"),
+    case("plan: pip install vía python", {"CommandLine": "python -m pip install openpyxl"}, "deny"),
     # En modo plan la edición y los comandos con efectos ya no los corta una regla: los
     # juzga el clasificador con la fase como contexto. Aquí, con el backend en "none",
     # se comprueba la degradación segura de ese camino.
@@ -467,10 +470,10 @@ def main() -> int:
         for _ in range(3)
     ]
     third, reason = escalation[2]
-    ok_breaker = third == "force_ask" and "ortacircuito" in reason
-    print(f"  {'ok  ' if ok_breaker else 'FALLA'}  {'cortacircuitos escala a 3a':<30} -> {third}")
+    ok_breaker = third == "deny" and "ortacircuito" in reason
+    print(f"  {'ok  ' if ok_breaker else 'FALLA'}  {'cortacircuitos actúa en la 3a':<30} -> {third}")
     if not ok_breaker:
-        failures.append(f"cortacircuitos: esperaba force_ask en la 3a, obtuvo {third}")
+        failures.append(f"cortacircuitos: esperaba deny con aviso en la 3a, obtuvo {third}")
 
     recovery, _ = invoke("run_command", {"CommandLine": "git status"}, "case_breaker", mode="auto")
     ok_recovery = recovery == "allow"

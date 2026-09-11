@@ -251,6 +251,17 @@ def write_counters(data: dict) -> None:
 # Motor de decisión
 # ─────────────────────────────────────────────────────────────────────────────
 
+def judge_disabled() -> bool:
+    """¿La persona lanzó la sesión con `AGY_AUTOMODE=off`?
+
+    Apaga solo lo que cuesta tiempo: el clasificador y la captura git. Las líneas rojas
+    —auto-protección, credenciales y comandos bloqueados— se siguen aplicando, porque son
+    instantáneas y son el freno ante un desastre. La variable la fija quien abre la sesión:
+    un `$env:` dentro de un comando del agente no llega al proceso de agy que lanza el hook.
+    """
+    return os.environ.get("AGY_AUTOMODE", "").strip().lower() == "off"
+
+
 def get_active_mode(policy: dict, payload: dict | None = None) -> str:
     """Modo vigente, por precedencia: entorno > conversación > política.
 
@@ -276,18 +287,14 @@ def get_active_mode(policy: dict, payload: dict | None = None) -> str:
     return modo.get("active", "auto").strip().lower()
 
 
-def is_python_exploration(command: str) -> bool:
-    """Detecta comandos de ejecución de python para exploración/scripts."""
-    pattern = r'^\s*(?:uv\s+run\s+)?(?:python|python3|py)\b'
-    return bool(re.search(pattern, command.strip()))
-
-
 def command_targets_outside(command: str, roots: list) -> str | None:
     """Devuelve la primera ruta del comando que cae fuera del proyecto, si la hay.
 
-    Sin esto, la libertad de ejecutar python en modo plan sería un atajo para
-    saltarse la fiscalización de lecturas: basta envolver el listado de una carpeta
-    ajena en `python -c` para esquivar la regla que mira las herramientas de lectura.
+    Le dice al clasificador si el comando se sale del proyecto. Python ya no tiene vía
+    rápida en modo plan: juzgarlo por su primera palabra dejaba pasar sin revisión
+    tanto `python -m pip install` como un `python -c` que borrase archivos (conversación
+    68da1f0a, s12). Como hace el auto mode de Claude Code con `Bash(python*)`, todo
+    intérprete pasa por el clasificador.
     """
     if not roots:
         return None
@@ -367,6 +374,8 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
     reporta pero no frena: es la salida para proyectos que no son repositorios y donde
     la persona acepta ese riesgo a conciencia.
     """
+    if judge_disabled():
+        return True, "sin captura (sesión con AGY_AUTOMODE=off)"
     cfg = policy.get("checkpoint", {})
     if not cfg.get("enabled", True):
         return True, "capturas desactivadas por política"
@@ -399,6 +408,8 @@ def classify(
     El veredicto es binario: `allow` o `deny`. Ante un fallo del propio clasificador se
     deniega con la marca técnica, nunca se deja pasar (ver `[classifier] on_failure`).
     """
+    if judge_disabled():
+        return "allow", "Sin clasificador: sesión lanzada con AGY_AUTOMODE=off."
     # La batería de pruebas pone AGY_AUTOMODE_BACKEND=none para no lanzar agy en cada caso.
     if os.environ.get("AGY_AUTOMODE_BACKEND", "").strip().lower() == "none":
         salida = policy.get("classifier", {}).get("on_failure", "deny")
@@ -451,12 +462,7 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
 
     roots = (payload.get("workspacePaths") if payload else []) or []
 
-    # 3. Exploración con python en modo plan: libre dentro del proyecto.
-    if active_mode == "plan" and is_python_exploration(command):
-        if not command_targets_outside(command, roots):
-            return "allow", "Ejecución de Python para exploración permitida en modo plan.", None
-
-    # 4. Todo lo demás lo juzga el clasificador, en ambos modos. La fase viaja como
+    # 3. Todo lo demás lo juzga el clasificador, en ambos modos. La fase viaja como
     #    contexto: no es lo mismo compilar mientras se planifica que tras la aprobación,
     #    y esa diferencia la pondera quien tiene el objetivo del trabajo delante.
     if not policy.get("classifier", {}).get("enabled", True):
@@ -569,9 +575,14 @@ def decide(payload: dict, policy: dict) -> tuple:
         # una regla pueda zanjar: dependen de si la acción pertenece al encargo. Los juzga
         # el clasificador, que es quien tiene delante el objetivo del trabajo y la fase.
         if outside or active_mode == "plan":
+            # El motivo nombra el destino real: si una escritura en scratch se etiqueta como
+            # "archivo del proyecto", el agente concluye que scratch también está vetado.
+            en_proyecto = any(looks_like_path(t) and within_roots(t, roots) for t in strings)
             motivo = (
                 f"Escritura fuera del proyecto: {outside[0][:120]}" if outside else
-                "Edición de un archivo del proyecto durante la fase de planeación."
+                "Edición de un archivo del proyecto durante la fase de planeación." if en_proyecto else
+                "Escritura en el directorio de trabajo de agy (scratch) durante la fase de "
+                "planeación; no toca el proyecto."
             )
             dec, reason = classify(
                 policy, work_objective(payload, policy), name, args, root_of(roots),
@@ -720,13 +731,24 @@ def main() -> int:
     write_counters(counters)
 
     breaker = policy.get("circuit_breaker", {})
-    if (counters.get("consecutive", 0) >= breaker.get("consecutive_denials", 3)
-            or counters.get("total", 0) >= breaker.get("total_denials", 20)):
-        effective = "force_ask"
+    # Sin supervisión, agy ejecuta un `force_ask` igual que un `ask`: se midió en la
+    # conversación 68da1f0a, donde tras escalar el agente leyó la configuración del hook.
+    # Por eso el cortacircuitos no escala: mantiene la denegación y le pide al agente que
+    # pare, como el auto mode de Claude Code en sesiones que no pueden preguntar. Solo
+    # actúa sobre denegaciones de política, y el total se reinicia al dispararse: de lo
+    # contrario, pasadas 20 denegaciones se bloquearía el resto de la sesión.
+    total_agotado = counters.get("total", 0) >= breaker.get("total_denials", 20)
+    if decision == "deny" and not tecnica and (
+            counters.get("consecutive", 0) >= breaker.get("consecutive_denials", 3)
+            or total_agotado):
         reason = (
             f"Cortacircuitos activado ({counters['consecutive']} denegaciones seguidas, "
-            f"{counters['total']} en la sesión). Revisa qué está intentando el agente."
+            f"{counters['total']} en la sesión): {reason} No insistas por esta vía; "
+            "cambia de enfoque o detente y explica al usuario qué necesitas."
         )
+        if total_agotado:
+            counters["total"] = 0
+            write_counters(counters)
 
     if effective != "allow" or mode.get("audit_allow", True):
         call = payload.get("toolCall") or {}

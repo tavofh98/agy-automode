@@ -75,8 +75,8 @@ def print_status() -> None:
     if mode == "plan":
         print("  Comportamiento MODO PLAN:")
         print("  - Lectura de archivos, búsquedas y git log/status: PERMITIDOS")
-        print("  - Ejecución de código Python para exploración: PERMITIDO")
-        print("  - Edición de código en proyecto o comandos con efectos: CONSULTA (ask)")
+        print("  - Ejecución de código Python: EVALUADA POR CLASIFICADOR")
+        print("  - Edición en el proyecto o comandos con efectos: EVALUADOS POR CLASIFICADOR")
     else:
         print("  Comportamiento MODO AUTO:")
         print("  - Edición de código en el proyecto: PERMITIDA (autonomía total)")
