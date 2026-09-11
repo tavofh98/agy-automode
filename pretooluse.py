@@ -370,15 +370,17 @@ def sin_respaldo(detalle: str) -> str:
 def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
     """Asegura que exista una captura del proyecto antes de un cambio destructivo.
 
-    Devuelve (hay_respaldo, detalle). Con `require = false` la ausencia de respaldo se
-    reporta pero no frena: es la salida para proyectos que no son repositorios y donde
-    la persona acepta ese riesgo a conciencia.
+    Devuelve (hay_respaldo, capturado, detalle). Con `require = false` la ausencia de
+    respaldo se reporta pero no frena: es la salida para proyectos que no son repositorios y
+    donde la persona acepta ese riesgo a conciencia. `capturado` dice si de verdad existe una
+    captura: con `AGY_AUTOMODE=off`, con las capturas desactivadas o con `require = false` se
+    deja pasar sin ella, y entonces el motivo no puede prometer que el cambio se pueda deshacer.
     """
     if judge_disabled():
-        return True, "sin captura (sesión con AGY_AUTOMODE=off)"
+        return True, False, "sesión con AGY_AUTOMODE=off"
     cfg = policy.get("checkpoint", {})
     if not cfg.get("enabled", True):
-        return True, "capturas desactivadas por política"
+        return True, False, "capturas desactivadas por política"
 
     conversation_id = (payload or {}).get("conversationId") or ""
     ok, detalle = ensure_checkpoint(
@@ -389,10 +391,10 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
         exclude_patterns=policy.get("paths", {}).get("sensitive", []),
     )
     if ok:
-        return True, f"{detalle}; deshacer con `{restore_hint(conversation_id)}`"
+        return True, True, f"{detalle}; deshacer con `{restore_hint(conversation_id)}`"
     if cfg.get("require", True):
-        return False, detalle
-    return True, f"sin respaldo ({detalle})"
+        return False, False, detalle
+    return True, False, detalle
 
 
 def classify(
@@ -483,10 +485,10 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
     if dec == "allow":
         # Un comando aprobado puede escribir o borrar: se respalda igual que una
         # edición, para que la aprobación no dependa de adivinar qué hará.
-        respaldado, detalle = guard_checkpoint(payload, policy, roots)
+        respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
         if not respaldado:
             return "deny", sin_respaldo(detalle), None
-        reason = f"{reason} Respaldo: {detalle}."
+        reason = f"{reason} {'Respaldo' if capturado else 'Sin respaldo'}: {detalle}."
     return dec, reason, None
 
 
@@ -571,13 +573,15 @@ def decide(payload: dict, policy: dict) -> tuple:
         ]
         outside = [t for t in strings if looks_like_path(t) and not within_roots(t, write_roots)]
 
+        # El motivo nombra el destino real: si una escritura en scratch se etiqueta como
+        # "archivo del proyecto", el agente concluye que scratch también está vetado, y que
+        # la captura del proyecto la cubre, cuando no es así.
+        en_proyecto = any(looks_like_path(t) and within_roots(t, roots) for t in strings)
+
         # Escribir fuera del proyecto, o escribir mientras se planifica, no son casos que
         # una regla pueda zanjar: dependen de si la acción pertenece al encargo. Los juzga
         # el clasificador, que es quien tiene delante el objetivo del trabajo y la fase.
         if outside or active_mode == "plan":
-            # El motivo nombra el destino real: si una escritura en scratch se etiqueta como
-            # "archivo del proyecto", el agente concluye que scratch también está vetado.
-            en_proyecto = any(looks_like_path(t) and within_roots(t, roots) for t in strings)
             motivo = (
                 f"Escritura fuera del proyecto: {outside[0][:120]}" if outside else
                 "Edición de un archivo del proyecto durante la fase de planeación." if en_proyecto else
@@ -597,10 +601,16 @@ def decide(payload: dict, policy: dict) -> tuple:
         # La libertad de modificar se apoya en poder deshacer. Antes del primer cambio
         # del bloque se captura el estado del proyecto; si no se puede, la afirmación
         # "reversible" sería falsa, así que se deniega diciendo cómo habilitarlo.
-        respaldado, detalle = guard_checkpoint(payload, policy, roots)
+        respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
         if not respaldado:
             return "deny", sin_respaldo(detalle), None
-        return "allow", f"Edición dentro del proyecto, reversible: {detalle}.", None
+        if not en_proyecto:
+            return ("allow", "Escritura en el directorio de trabajo de agy (scratch), fuera del "
+                    "proyecto: la captura git no la cubre.", None)
+        if capturado:
+            return "allow", f"Edición dentro del proyecto, reversible: {detalle}.", None
+        return ("allow", f"Edición dentro del proyecto, sin respaldo ({detalle}): no se puede "
+                "deshacer con git.", None)
 
     # 6. Herramientas complejas o externas (always_evaluate, etc.). El clasificador
     #    interviene en ambos modos: la fase es contexto para su juicio, no un motivo
@@ -614,10 +624,10 @@ def decide(payload: dict, policy: dict) -> tuple:
                               else f"Herramienta no declarada en la política: {name}.")},
         )
         if dec == "allow" and name in tools.get("destructive", []):
-            respaldado, detalle = guard_checkpoint(payload, policy, roots)
+            respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
             if not respaldado:
                 return "deny", sin_respaldo(detalle), None
-            reason = f"{reason} Respaldo: {detalle}."
+            reason = f"{reason} {'Respaldo' if capturado else 'Sin respaldo'}: {detalle}."
         return dec, reason, None
 
     return "deny", f"Clasificador deshabilitado por política y herramienta no cubierta por reglas: {name}", None
