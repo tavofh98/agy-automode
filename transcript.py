@@ -1,14 +1,3 @@
-"""Extractor de intención del usuario (Reasoning-Blind) y del objetivo del trabajo.
-
-Lee el transcript de la conversación generado por agy y extrae exclusivamente los
-mensajes auténticos del usuario (source: USER_EXPLICIT o type: USER_INPUT).
-Descarta todo razonamiento interno, salidas de herramientas y respuestas del modelo
-para evitar prompt injection y auto-racionalizaciones.
-
-Aporta además el **objetivo del trabajo**: cuando se aprueba un plan, agy lo escribe
-en `brain/<conversationId>/`. Ese documento, y no los últimos mensajes sueltos, es la
-vara contra la que se mide si una acción pertenece al trabajo en curso.
-"""
 import json
 import re
 import os

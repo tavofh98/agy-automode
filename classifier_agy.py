@@ -1,31 +1,3 @@
-"""Clasificador del auto mode, basado en `agy`.
-
-Juzga las llamadas a herramientas que las reglas estáticas de `policy.toml` no resuelven.
-Usa el propio `agy`, ya instalado y autenticado en la máquina donde corre el hook: sin
-claves ni configuración aparte.
-
-- Razonamiento 'reasoning-blind': solo ve la intención del usuario, el plan y la tool call.
-- Caché local de decisiones (state/decision_cache.json) para no repetir consultas.
-- Falla cerrado: ante cualquier error, timeout o salida ilegible deniega, marcando el
-  motivo como fallo técnico para distinguirlo de un juicio de política.
-- Veredicto binario: `allow` o `deny`. El `ask` desapareció porque en sesión desatendida
-  equivale a ejecutar sin revisión (medido: bajo --dangerously-skip-permissions, agy
-  respeta el deny del hook pero ejecuta su ask).
-
-Se invoca `agy --print` en modo no interactivo. Medido en Windows: ~1.3 s de modelo
-y ~3.4 s de arranque del binario, unos 5 s por llamada. La caché de decisiones es
-lo que hace tolerable ese costo, así que aquí no es un lujo sino parte del diseño.
-
-`--json-schema` no fuerza el formato en modo print (se verificó: devuelve prosa),
-de modo que el contrato JSON se sostiene con el prompt estricto y un extractor
-tolerante. Ante cualquier duda sobre la salida, se devuelve `deny` con la marca de
-fallo técnico: en sesión desatendida no hay a quién preguntar.
-
-RECURSIÓN: el `agy` anidado se lanza con `AGY_AUTOMODE_INFLIGHT=1` y con `cwd` en un
-directorio temporal fuera de todo workspace, para que no descubra `.agents/hooks.json`.
-`pretooluse.py` corta en seco si ve esa variable. Ambas defensas son necesarias: el
-binario admite también un `hooks.json` global en `~/.gemini/config/`.
-"""
 import hashlib
 import json
 import os
