@@ -21,7 +21,7 @@ INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
 
 # `ask` se acepta al leer la respuesta pero vale `deny`: sin nadie mirando, se ejecutaría.
 VALID = ("allow", "ask", "deny")
-EQUIVALENCIAS = {"ask": "deny"}
+ALIASES = {"ask": "deny"}
 
 
 class DecisionCache:
@@ -32,8 +32,8 @@ class DecisionCache:
 
     def _hash_key(self, user_intent: str, tool_name: str, args: dict, context: dict | None = None) -> str:
         # La fase entra en la clave: la misma acción en plan y en ejecución son preguntas distintas.
-        marca = json.dumps(context or {}, sort_keys=True, ensure_ascii=False)
-        content = f"{user_intent.strip()}||{tool_name}||{json.dumps(args, sort_keys=True)}||{marca}"
+        context_key = json.dumps(context or {}, sort_keys=True, ensure_ascii=False)
+        content = f"{user_intent.strip()}||{tool_name}||{json.dumps(args, sort_keys=True)}||{context_key}"
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def get(self, user_intent: str, tool_name: str, args: dict,
@@ -126,14 +126,14 @@ def render_context(context: dict | None) -> str:
     """Fase del trabajo y motivo de la consulta, que el juez necesita para decidir."""
     if not context:
         return ""
-    partes = []
-    fase = (context.get("phase") or "").strip()
-    if fase:
-        partes.append(f"CURRENT PHASE: {fase}")
-    regla = (context.get("rule") or "").strip()
-    if regla:
-        partes.append(f"WHY YOU ARE BEING ASKED: {regla}")
-    return "\n".join(partes) + "\n\n" if partes else ""
+    parts = []
+    phase = (context.get("phase") or "").strip()
+    if phase:
+        parts.append(f"CURRENT PHASE: {phase}")
+    rule = (context.get("rule") or "").strip()
+    if rule:
+        parts.append(f"WHY YOU ARE BEING ASKED: {rule}")
+    return "\n".join(parts) + "\n\n" if parts else ""
 
 
 def build_prompt(user_intent: str, tool_name: str, tool_args: dict,
@@ -186,7 +186,7 @@ def extract_decision(text: str) -> tuple[str, str] | None:
         decision = str(parsed.get("decision", "")).strip().lower()
         if decision in VALID:
             reason = str(parsed.get("reason", "")).strip() or "Decisión emitida por agy."
-            return EQUIVALENCIAS.get(decision, decision), reason
+            return ALIASES.get(decision, decision), reason
     return None
 
 
@@ -226,9 +226,9 @@ def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
         return "deny", f"{TECHNICAL_MARK} No se pudo lanzar el clasificador agy ({exc}): sin veredicto, no se ejecuta."
 
     if proc.returncode != 0:
-        detalle = (proc.stderr or "").strip().splitlines()
-        cola = detalle[-1][:120] if detalle else f"código {proc.returncode}"
-        return "deny", f"{TECHNICAL_MARK} El clasificador agy falló ({cola}): sin veredicto, no se ejecuta."
+        stderr_lines = (proc.stderr or "").strip().splitlines()
+        last_line = stderr_lines[-1][:120] if stderr_lines else f"código {proc.returncode}"
+        return "deny", f"{TECHNICAL_MARK} El clasificador agy falló ({last_line}): sin veredicto, no se ejecuta."
 
     # La envoltura de `--output-format json` es una línea JSON con `status` y `response`.
     envelope = None

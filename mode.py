@@ -13,10 +13,10 @@ def get_current_mode() -> str:
         return env_mode
     if POLICY_FILE.exists():
         try:
-            txt = POLICY_FILE.read_text(encoding="utf-8")
-            m = re.search(r'^\s*active\s*=\s*["\']([^"\']+)["\']', txt, re.MULTILINE)
-            if m:
-                return m.group(1).strip().lower()
+            text = POLICY_FILE.read_text(encoding="utf-8")
+            match = re.search(r'^\s*active\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+            if match:
+                return match.group(1).strip().lower()
         except OSError:
             pass
     return "auto"

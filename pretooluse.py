@@ -65,9 +65,9 @@ except ImportError:
 
 HERE = pathlib.Path(__file__).resolve().parent
 POLICY_FILE = HERE / "policy.toml"
-# Estado de la conversación en curso. `main()` lo fija con `state_dir_for` antes de
+# Estado de la conversación en curso. `main()` lo fija con `resolve_state_dir` antes de
 # decidir; este valor solo rige si la llamada no pudo leerse.
-STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "automode_sin_conversacion"
+STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "automode_no_conversation"
 # Conversación en curso: cada una tiene su propio juez precargado.
 CONVERSATION_ID = ""
 
@@ -88,7 +88,7 @@ def safe_id(conversation_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", conversation_id or "no_id")[:64]
 
 
-def state_dir_for(payload: dict, policy: dict) -> pathlib.Path:
+def resolve_state_dir(payload: dict, policy: dict) -> pathlib.Path:
     """Estado de la conversación, en `brain/<id>/.agents/automode/`: fuera del alcance del agente."""
     conversation_id = payload.get("conversationId") or ""
     # La batería de pruebas redirige el estado a un directorio efímero, con una
@@ -104,7 +104,7 @@ def state_dir_for(payload: dict, policy: dict) -> pathlib.Path:
         plan_root = policy.get("classifier", {}).get("plan_root", "~/.gemini/antigravity-cli/brain")
         base = pathlib.Path(os.path.expandvars(os.path.expanduser(plan_root))) / safe_id(conversation_id)
     else:
-        return pathlib.Path(tempfile.gettempdir()) / "automode_sin_conversacion"
+        return pathlib.Path(tempfile.gettempdir()) / "automode_no_conversation"
     return base / ".agents" / "automode"
 
 
@@ -124,7 +124,7 @@ def collect_strings(value, acc: list, skip_keys: set | None = None) -> list:
     return acc
 
 
-def looks_like_path(text: str) -> bool:
+def is_path_candidate(text: str) -> bool:
     if not text or len(text) > 4096:
         return False
     return bool(
@@ -198,7 +198,7 @@ def match_any(text: str, patterns) -> str | None:
     return None
 
 
-def within_roots(path: str, roots: list) -> bool:
+def is_contained(path: str, roots: list) -> bool:
     """¿La ruta resuelta cae bajo alguna de las raíces del workspace?"""
     if not roots:
         return False
@@ -259,17 +259,17 @@ def get_active_mode(policy: dict, payload: dict | None = None) -> str:
     if env_mode in ("plan", "auto"):
         return env_mode
 
-    modo = policy.get("mode", {})
-    if payload and modo.get("follow_conversation", True):
-        fase = detect_phase(
+    mode_cfg = policy.get("mode", {})
+    if payload and mode_cfg.get("follow_conversation", True):
+        phase = detect_phase(
             payload.get("transcriptPath"),
-            modo.get("plan_triggers", []),
-            modo.get("auto_triggers", []),
+            mode_cfg.get("plan_triggers", []),
+            mode_cfg.get("auto_triggers", []),
         )
-        if fase in ("plan", "auto"):
-            return fase
+        if phase in ("plan", "auto"):
+            return phase
 
-    return modo.get("active", "auto").strip().lower()
+    return mode_cfg.get("active", "auto").strip().lower()
 
 
 def command_targets_outside(command: str, roots: list) -> str | None:
@@ -277,25 +277,25 @@ def command_targets_outside(command: str, roots: list) -> str | None:
     if not roots:
         return None
     # Se rastrea el comando entero: en `python -c "..."` la ruta va pegada al código.
-    fin = r"""[^\s"'()\[\],;:]*"""
-    patrones = [
+    tail = r"""[^\s"'()\[\],;:]*"""
+    patterns = [
         # C:\... o C:/... El lookbehind descarta esquemas de URL (`https://`), donde la
         # letra anterior haría pasar `s:/` por una unidad.
-        rf"(?<![\w])[A-Za-z]:[\\/]{fin}",
-        rf"~[\\/]{fin}",                  # ~/...
-        rf"\.\.[\\/]{fin}",               # traversal hacia arriba
+        rf"(?<![\w])[A-Za-z]:[\\/]{tail}",
+        rf"~[\\/]{tail}",                  # ~/...
+        rf"\.\.[\\/]{tail}",               # traversal hacia arriba
         # POSIX absolutas. El lookbehind evita que `./out/fig.png` se lea como `/out/...`.
-        rf"(?<![\w.~/:])/(?:[\w.-]+/){{1,}}{fin}",
+        rf"(?<![\w.~/:])/(?:[\w.-]+/){{1,}}{tail}",
     ]
-    for patron in patrones:
-        for encontrada in re.findall(patron, command):
-            ruta = encontrada.rstrip("\\/")
-            if ruta and not within_roots(ruta, roots):
-                return ruta
+    for pattern in patterns:
+        for match in re.findall(pattern, command):
+            path = match.rstrip("\\/")
+            if path and not is_contained(path, roots):
+                return path
     return None
 
 
-def root_of(roots: list) -> pathlib.Path:
+def primary_root(roots: list) -> pathlib.Path:
     """Raíz del proyecto según el payload, con el repositorio como último recurso."""
     return pathlib.Path(roots[0]) if roots else HERE.parent.parent
 
@@ -305,7 +305,7 @@ def work_objective(payload: dict | None, policy: dict) -> str:
     if not payload:
         return ""
     cfg = policy.get("classifier", {})
-    partes = []
+    parts = []
 
     plan = read_work_objective(
         payload.get("conversationId") or "",
@@ -314,19 +314,19 @@ def work_objective(payload: dict | None, policy: dict) -> str:
         artifact_dir=payload.get("artifactDirectoryPath") or "",
     )
     if plan:
-        partes.append(f"PLAN DE TRABAJO APROBADO:\n{plan}")
+        parts.append(f"PLAN DE TRABAJO APROBADO:\n{plan}")
 
     intent = extract_user_intent(payload.get("transcriptPath"))
     if intent:
-        partes.append(f"INSTRUCCIONES RECIENTES DEL USUARIO:\n{intent}")
+        parts.append(f"INSTRUCCIONES RECIENTES DEL USUARIO:\n{intent}")
 
-    return "\n\n".join(partes)
+    return "\n\n".join(parts)
 
 
-def sin_respaldo(detalle: str) -> str:
+def explain_missing_backup(detail: str) -> str:
     """Motivo cuando no hay respaldo: el hook no ejecuta `git init`, le pide al agente que lo haga."""
     return (
-        f"Sin respaldo del proyecto ({detalle}). Ejecuta `git init` en la raíz del "
+        f"Sin respaldo del proyecto ({detail}). Ejecuta `git init` en la raíz del "
         "proyecto y reintenta: el auto mode necesita poder deshacer antes de modificar."
     )
 
@@ -340,8 +340,8 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
         return True, False, "capturas desactivadas por política"
 
     conversation_id = (payload or {}).get("conversationId") or ""
-    ok, detalle = ensure_checkpoint(
-        root_of(roots),
+    ok, detail = ensure_checkpoint(
+        primary_root(roots),
         conversation_id,
         STATE_DIR,
         min_interval_seconds=float(cfg.get("min_interval_seconds", 300)),
@@ -351,10 +351,10 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
     )
     if ok:
         hint = restore_hint(conversation_id, omitted_paths(STATE_DIR, conversation_id))
-        return True, True, f"{detalle}; deshacer con `{hint}`"
+        return True, True, f"{detail}; deshacer con `{hint}`"
     if cfg.get("require", True):
-        return False, False, detalle
-    return True, False, detalle
+        return False, False, detail
+    return True, False, detail
 
 
 def classify(
@@ -370,8 +370,8 @@ def classify(
         return "allow", "Sin clasificador: sesión lanzada con AGY_AUTOMODE=off."
     # La batería de pruebas pone AGY_AUTOMODE_BACKEND=none para no lanzar agy en cada caso.
     if os.environ.get("AGY_AUTOMODE_BACKEND", "").strip().lower() == "none":
-        salida = policy.get("classifier", {}).get("on_failure", "deny")
-        return salida, f"{TECHNICAL_MARK} Clasificador desactivado: no hay quien juzgue esta acción."
+        fallback = policy.get("classifier", {}).get("on_failure", "deny")
+        return fallback, f"{TECHNICAL_MARK} Clasificador desactivado: no hay quien juzgue esta acción."
     return classify_with_agy(
         user_intent=user_intent,
         tool_name=tool_name,
@@ -410,16 +410,16 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
         return "deny", "Comando vacío o no interpretable: no hay nada que autorizar.", None
 
     # 2. Seguro si todos los segmentos lo son, sin código incrustado ni rutas fuera del proyecto.
-    def is_safe(seg: str) -> bool:
-        limpio = HARMLESS_REDIRECT.sub("", seg)
-        return bool(match_any(limpio, [r"^\s*" + p for p in safe])
-                    and not EMBEDDED_CODE.search(limpio) and not UNRESOLVED_PATH.search(limpio))
+    def is_safe(segment: str) -> bool:
+        cleaned = HARMLESS_REDIRECT.sub("", segment)
+        return bool(match_any(cleaned, [r"^\s*" + p for p in safe])
+                    and not EMBEDDED_CODE.search(cleaned) and not UNRESOLVED_PATH.search(cleaned))
 
-    all_safe = all(is_safe(seg) for seg in segments)
+    all_safe = all(is_safe(segment) for segment in segments)
     roots = (payload.get("workspacePaths") if payload else []) or []
-    fuera = command_targets_outside(command, roots)
+    outside_paths = command_targets_outside(command, roots)
 
-    if all_safe and not fuera:
+    if all_safe and not outside_paths:
         return "allow", "Todos los segmentos son comandos de solo consulta o verificación.", None
 
     # 3. Todo lo demás lo juzga el clasificador, con la fase como contexto.
@@ -428,23 +428,23 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
 
     tool_name = payload.get("toolCall", {}).get("name", "run_command") if payload else "run_command"
     tool_args = payload.get("toolCall", {}).get("args", {}) if payload else {"CommandLine": command}
-    motivo_consulta = (
-        f"Comando fuera del alcance de las reglas estáticas. Toca la ruta {fuera[:80]}, fuera del proyecto."
-        if fuera else
+    rule_text = (
+        f"Comando fuera del alcance de las reglas estáticas. Toca la ruta {outside_paths[:80]}, fuera del proyecto."
+        if outside_paths else
         "Comando fuera del alcance de las reglas estáticas: no figura entre los seguros ni entre los bloqueados."
     )
-    dec, reason = classify(
-        policy, work_objective(payload, policy), tool_name, tool_args, root_of(roots),
-        context={"phase": active_mode, "rule": motivo_consulta},
+    verdict, reason = classify(
+        policy, work_objective(payload, policy), tool_name, tool_args, primary_root(roots),
+        context={"phase": active_mode, "rule": rule_text},
     )
-    if dec == "allow":
+    if verdict == "allow":
         # Un comando aprobado puede escribir o borrar: se respalda igual que una
         # edición, para que la aprobación no dependa de adivinar qué hará.
-        respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
-        if not respaldado:
-            return "deny", sin_respaldo(detalle), None
-        reason = f"{reason} {'Respaldo' if capturado else 'Sin respaldo'}: {detalle}."
-    return dec, reason, None
+        backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
+        if not backed_up:
+            return "deny", explain_missing_backup(detail), None
+        reason = f"{reason} {'Respaldo' if captured else 'Sin respaldo'}: {detail}."
+    return verdict, reason, None
 
 
 def decide(payload: dict, policy: dict) -> tuple:
@@ -480,7 +480,7 @@ def decide(payload: dict, policy: dict) -> tuple:
     # 2. Rutas sensibles. Leer credenciales es exploración de credenciales aunque
     #    técnicamente sea una operación de lectura.
     for text in strings:
-        if not looks_like_path(text):
+        if not is_path_candidate(text):
             continue
         hit = match_any(text, paths.get("sensitive", []))
         if hit:
@@ -508,17 +508,17 @@ def decide(payload: dict, policy: dict) -> tuple:
                     hit,
                 )
 
-        fuera = [t for t in strings if looks_like_path(t) and not within_roots(t, roots)]
-        if not fuera:
+        outside_paths = [t for t in strings if is_path_candidate(t) and not is_contained(t, roots)]
+        if not outside_paths:
             return "allow", "Lectura dentro del proyecto.", None
-        dec, reason = classify(
-            policy, work_objective(payload, policy), name, args, root_of(roots),
+        verdict, reason = classify(
+            policy, work_objective(payload, policy), name, args, primary_root(roots),
             context={"phase": active_mode,
-                     "rule": f"Lectura fuera del proyecto: {fuera[0][:120]}"},
+                     "rule": f"Lectura fuera del proyecto: {outside_paths[0][:120]}"},
         )
-        if dec == "allow":
+        if verdict == "allow":
             return "allow", reason, None
-        return dec, f"Lectura fuera del proyecto ({fuera[0][:80]}). {reason}", None
+        return verdict, f"Lectura fuera del proyecto ({outside_paths[0][:80]}). {reason}", None
 
     # 5. Nivel 2 — escritura dentro del proyecto.
     if name in tools.get("write", []):
@@ -528,56 +528,56 @@ def decide(payload: dict, policy: dict) -> tuple:
             os.path.expandvars(os.path.expanduser(r))
             for r in paths.get("extra_write_roots", [])
         ]
-        outside = [t for t in strings if looks_like_path(t) and not within_roots(t, write_roots)]
+        outside = [t for t in strings if is_path_candidate(t) and not is_contained(t, write_roots)]
 
         # El motivo nombra el destino real: scratch no es el proyecto ni lo cubre la captura.
-        en_proyecto = any(looks_like_path(t) and within_roots(t, roots) for t in strings)
+        touches_project = any(is_path_candidate(t) and is_contained(t, roots) for t in strings)
 
         # Escribir fuera del proyecto o durante la planeación lo juzga el clasificador.
         if outside or active_mode == "plan":
-            motivo = (
+            rule_text = (
                 f"Escritura fuera del proyecto: {outside[0][:120]}" if outside else
-                "Edición de un archivo del proyecto durante la fase de planeación." if en_proyecto else
+                "Edición de un archivo del proyecto durante la fase de planeación." if touches_project else
                 "Escritura en el directorio de trabajo de agy (scratch) durante la fase de "
                 "planeación; no toca el proyecto."
             )
-            dec, reason = classify(
-                policy, work_objective(payload, policy), name, args, root_of(roots),
-                context={"phase": active_mode, "rule": motivo},
+            verdict, reason = classify(
+                policy, work_objective(payload, policy), name, args, primary_root(roots),
+                context={"phase": active_mode, "rule": rule_text},
             )
-            if dec != "allow":
-                return dec, f"{motivo} {reason}", None
+            if verdict != "allow":
+                return verdict, f"{rule_text} {reason}", None
             if outside:
                 return "allow", reason, None
             # Aprobado en modo plan: sigue necesitando respaldo, como toda edición.
 
         # Sin captura posible no se modifica: "reversible" sería falso.
-        respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
-        if not respaldado:
-            return "deny", sin_respaldo(detalle), None
-        if not en_proyecto:
+        backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
+        if not backed_up:
+            return "deny", explain_missing_backup(detail), None
+        if not touches_project:
             return ("allow", "Escritura en el directorio de trabajo de agy (scratch), fuera del "
                     "proyecto: la captura git no la cubre.", None)
-        if capturado:
-            return "allow", f"Edición dentro del proyecto, reversible: {detalle}.", None
-        return ("allow", f"Edición dentro del proyecto, sin respaldo ({detalle}): no se puede "
+        if captured:
+            return "allow", f"Edición dentro del proyecto, reversible: {detail}.", None
+        return ("allow", f"Edición dentro del proyecto, sin respaldo ({detail}): no se puede "
                 "deshacer con git.", None)
 
     # 6. Herramientas con efectos externos o no declaradas: las juzga el clasificador.
     if policy.get("classifier", {}).get("enabled", True):
-        conocida = name in tools.get("always_evaluate", [])
-        dec, reason = classify(
-            policy, work_objective(payload, policy), name, args, root_of(roots),
+        known = name in tools.get("always_evaluate", [])
+        verdict, reason = classify(
+            policy, work_objective(payload, policy), name, args, primary_root(roots),
             context={"phase": active_mode,
-                     "rule": ("Herramienta con efectos externos o destructivos." if conocida
+                     "rule": ("Herramienta con efectos externos o destructivos." if known
                               else f"Herramienta no declarada en la política: {name}.")},
         )
-        if dec == "allow" and name in tools.get("destructive", []):
-            respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
-            if not respaldado:
-                return "deny", sin_respaldo(detalle), None
-            reason = f"{reason} {'Respaldo' if capturado else 'Sin respaldo'}: {detalle}."
-        return dec, reason, None
+        if verdict == "allow" and name in tools.get("destructive", []):
+            backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
+            if not backed_up:
+                return "deny", explain_missing_backup(detail), None
+            reason = f"{reason} {'Respaldo' if captured else 'Sin respaldo'}: {detail}."
+        return verdict, reason, None
 
     return "deny", f"Clasificador deshabilitado por política y herramienta no cubierta por reglas: {name}", None
 
@@ -602,28 +602,28 @@ def permission_overrides(payload: dict, policy: dict, decision: str) -> list:
     if not policy.get("mode", {}).get("emit_permission_overrides", True):
         return []
     tool = (payload.get("toolCall") or {})
-    nombre = (tool.get("name") or "").strip()
-    clave = policy.get("tools", {}).get("command_arg", {}).get(nombre)
-    if not clave:
+    tool_name = (tool.get("name") or "").strip()
+    arg_key = policy.get("tools", {}).get("command_arg", {}).get(tool_name)
+    if not arg_key:
         return []
-    comando = (tool.get("args") or {}).get(clave)
-    if not isinstance(comando, str) or not comando.strip():
+    command = (tool.get("args") or {}).get(arg_key)
+    if not isinstance(command, str) or not command.strip():
         return []
-    return [f"command({unwrap_quotes(comando)})"]
+    return [f"command({unwrap_quotes(command)})"]
 
 
 def respond(decision: str, reason: str, overrides: list | None = None) -> None:
-    salida = {"decision": decision, "reason": reason}
+    output = {"decision": decision, "reason": reason}
     if overrides:
-        salida["permissionOverrides"] = overrides
-    print(json.dumps(salida, ensure_ascii=False))
+        output["permissionOverrides"] = overrides
+    print(json.dumps(output, ensure_ascii=False))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     global STATE_DIR, CONVERSATION_ID
-    inicio = time.monotonic()
+    start = time.monotonic()
 
     # Anti-recursión: quien llama es el agy del juez, que no usa herramientas. Va antes de
     # leer la política para que ni un error de configuración abra el ciclo.
@@ -648,7 +648,7 @@ def main() -> int:
                "error": f"policy: {exc}"})
         return 0
 
-    STATE_DIR = state_dir_for(payload, policy)
+    STATE_DIR = resolve_state_dir(payload, policy)
     CONVERSATION_ID = payload.get("conversationId") or ""
 
     try:
@@ -664,10 +664,10 @@ def main() -> int:
 
     # Cortacircuitos: insistir en caminos prohibidos es estar atascado. Los fallos técnicos
     # del clasificador no cuentan.
-    tecnica = is_technical(reason)
+    technical = is_technical(reason)
     conversation_id = payload.get("conversationId") or ""
     counters = read_counters()
-    if decision == "deny" and not tecnica:
+    if decision == "deny" and not technical:
         counters["consecutive"] = counters.get("consecutive", 0) + 1
         counters["total"] = counters.get("total", 0) + 1
     elif decision == "allow":
@@ -677,16 +677,16 @@ def main() -> int:
     breaker = policy.get("circuit_breaker", {})
     # No escala a `force_ask` (agy lo ejecuta sin preguntar): mantiene la denegación y pide
     # parar. El total se reinicia al dispararse para no bloquear el resto de la sesión.
-    total_agotado = counters.get("total", 0) >= breaker.get("total_denials", 20)
-    if decision == "deny" and not tecnica and (
+    total_exhausted = counters.get("total", 0) >= breaker.get("total_denials", 20)
+    if decision == "deny" and not technical and (
             counters.get("consecutive", 0) >= breaker.get("consecutive_denials", 3)
-            or total_agotado):
+            or total_exhausted):
         reason = (
             f"Cortacircuitos activado ({counters['consecutive']} denegaciones seguidas, "
             f"{counters['total']} en la sesión): {reason} No insistas por esta vía; "
             "cambia de enfoque o detente y explica al usuario qué necesitas."
         )
-        if total_agotado:
+        if total_exhausted:
             counters["total"] = 0
             write_counters(counters)
 
@@ -701,13 +701,13 @@ def main() -> int:
             "step": payload.get("stepIdx"),
             "tool": call.get("name"),
             "args": call.get("args"),
-            "tecnica": tecnica,
+            "technical": technical,
             "decision": decision,
             "effective": effective,
             "reason": reason,
             "rule": rule,
             # Cuánto tardó la decisión: las reglas resuelven en milisegundos, el juez en segundos.
-            "ms": int((time.monotonic() - inicio) * 1000),
+            "ms": int((time.monotonic() - start) * 1000),
         })
 
     respond(effective, reason, permission_overrides(payload, policy, effective))

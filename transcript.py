@@ -71,9 +71,9 @@ def read_work_objective(
     # Manda `artifactDirectoryPath` del payload: la ruta cambia entre CLI, IDE y Antigravity 2.0.
     base = None
     if artifact_dir:
-        candidata = pathlib.Path(os.path.expandvars(os.path.expanduser(artifact_dir)))
-        if candidata.is_dir():
-            base = candidata
+        candidate = pathlib.Path(os.path.expandvars(os.path.expanduser(artifact_dir)))
+        if candidate.is_dir():
+            base = candidate
     if base is None:
         if not conversation_id:
             return ""
@@ -81,33 +81,33 @@ def read_work_objective(
     if not base.is_dir():
         return ""
     try:
-        planes = sorted(base.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+        plans = sorted(base.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
     except OSError:
         return ""
-    if not planes:
+    if not plans:
         return ""
     try:
-        texto = planes[0].read_text(encoding="utf-8", errors="replace").strip()
+        text = plans[0].read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return ""
-    if len(texto) > max_chars:
-        texto = texto[:max_chars] + "\n[...plan truncado...]"
-    return texto
+    if len(text) > max_chars:
+        text = text[:max_chars] + "\n[...plan truncado...]"
+    return text
 
 
 # Etiquetas con que agy envuelve el mensaje del usuario en el transcript.
-_ENVOLTURAS = ("<USER_REQUEST>", "</USER_REQUEST>")
+_WRAPPER_TAGS = ("<USER_REQUEST>", "</USER_REQUEST>")
 
 
-def _limpiar(contenido) -> str:
+def _strip_wrappers(content) -> str:
     """Devuelve el texto del usuario sin las etiquetas que agy le añade."""
-    if isinstance(contenido, list):
-        partes = [p.get("text", "") if isinstance(p, dict) else str(p) for p in contenido]
-        contenido = " ".join(partes)
-    texto = str(contenido or "")
-    for etiqueta in _ENVOLTURAS:
-        texto = texto.replace(etiqueta, " ")
-    return texto.strip()
+    if isinstance(content, list):
+        parts = [p.get("text", "") if isinstance(p, dict) else str(p) for p in content]
+        content = " ".join(parts)
+    text = str(content or "")
+    for tag in _WRAPPER_TAGS:
+        text = text.replace(tag, " ")
+    return text.strip()
 
 
 def detect_phase(
@@ -122,7 +122,7 @@ def detect_phase(
     if not path.exists() or not path.is_file():
         return None
 
-    fase = None
+    phase = None
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -135,18 +135,18 @@ def detect_phase(
                     continue
                 if record.get("source") not in ("USER_EXPLICIT", "USER"):
                     continue
-                texto = _limpiar(record.get("content", "")).lower()
-                if not texto:
+                text = _strip_wrappers(record.get("content", "")).lower()
+                if not text:
                     continue
-                for patron in auto_triggers:
-                    if re.search(patron, texto, re.IGNORECASE):
-                        fase = "auto"
+                for pattern in auto_triggers:
+                    if re.search(pattern, text, re.IGNORECASE):
+                        phase = "auto"
                         break
                 else:
-                    for patron in plan_triggers:
-                        if re.search(patron, texto, re.IGNORECASE):
-                            fase = "plan"
+                    for pattern in plan_triggers:
+                        if re.search(pattern, text, re.IGNORECASE):
+                            phase = "plan"
                             break
     except (OSError, UnicodeDecodeError):
         return None
-    return fase
+    return phase

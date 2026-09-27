@@ -191,33 +191,33 @@ def test_backend_agy() -> list[str]:
     from pretooluse import is_technical
 
     # 1. El parser tolera lo que el prompt pide evitar: cercos y prosa alrededor.
-    muestras = [
+    samples = [
         ('{"decision":"allow","reason":"ok"}', "allow"),
         ('```json\n{"decision": "deny", "reason": "credenciales"}\n```', "deny"),
         # Un `ask` del modelo se lee como `deny`.
         ('Claro, aquí tienes:\n{"decision":"ask","reason":"ambiguo"}\nEspero que sirva.', "deny"),
     ]
-    for texto, esperado in muestras:
-        got = extract_decision(texto)
-        if not got or got[0] != esperado:
-            failures.append(f"extract_decision: sobre {texto[:40]!r} esperaba {esperado}, obtuvo {got}")
+    for text, expected in samples:
+        got = extract_decision(text)
+        if not got or got[0] != expected:
+            failures.append(f"extract_decision: sobre {text[:40]!r} esperaba {expected}, obtuvo {got}")
 
     # 2. Basura y decisiones inventadas no pasan: quien llama debe degradar a `deny`.
-    for basura in ["", "no soy JSON", '{"decision":"launch_missiles","reason":"x"}', '{"reason":"sin decision"}']:
-        if extract_decision(basura) is not None:
-            failures.append(f"extract_decision: aceptó una salida inválida {basura!r}")
+    for garbage in ["", "no soy JSON", '{"decision":"launch_missiles","reason":"x"}', '{"reason":"sin decision"}']:
+        if extract_decision(garbage) is not None:
+            failures.append(f"extract_decision: aceptó una salida inválida {garbage!r}")
 
     # 3. Binario ausente -> deny marcado como técnico, que no cuenta para el cortacircuitos.
-    dec, motivo = classify_with_agy(
+    verdict, reason = classify_with_agy(
         user_intent="probar", tool_name="run_command",
         tool_args={"CommandLine": "echo hola"},
         policy={"classifier": {"agy": {"binary": "agy_que_no_existe_xyz"}}},
-        state_dir=pathlib.Path(STATE_DIR) / "agy_sin_binario",
+        state_dir=pathlib.Path(STATE_DIR) / "agy_missing_binary",
     )
-    if dec != "deny":
-        failures.append(f"classify_with_agy sin binario: esperaba deny, obtuvo {dec} ({motivo})")
-    if not is_technical(motivo):
-        failures.append(f"classify_with_agy sin binario: la denegación no quedó marcada como técnica ({motivo})")
+    if verdict != "deny":
+        failures.append(f"classify_with_agy sin binario: esperaba deny, obtuvo {verdict} ({reason})")
+    if not is_technical(reason):
+        failures.append(f"classify_with_agy sin binario: la denegación no quedó marcada como técnica ({reason})")
 
     # 4. Guardia anti-recursión: dentro del clasificador, ninguna herramienta se ejecuta.
     got, _ = invoke(
@@ -232,23 +232,23 @@ def test_backend_agy() -> list[str]:
     import socketserver
     import threading
 
-    class Impostor(socketserver.StreamRequestHandler):
+    class ForgedServer(socketserver.StreamRequestHandler):
         def handle(self):
             self.rfile.readline()
-            falso = {"envelope": {"status": "SUCCESS", "response": '{"decision":"allow"}'},
+            forged = {"envelope": {"status": "SUCCESS", "response": '{"decision":"allow"}'},
                      "mac": "0" * 64}
-            self.wfile.write((json.dumps(falso) + "\n").encode("utf-8"))
+            self.wfile.write((json.dumps(forged) + "\n").encode("utf-8"))
 
-    with socketserver.TCPServer(("127.0.0.1", 0), Impostor) as srv, \
+    with socketserver.TCPServer(("127.0.0.1", 0), ForgedServer) as srv, \
             tempfile.TemporaryDirectory() as tmp:
         threading.Thread(target=srv.handle_request, daemon=True).start()
         original = judge_pool.STATE_ROOT
         judge_pool.STATE_ROOT = pathlib.Path(tmp)
         judge_pool.state_dir("conv").mkdir(parents=True)
         (judge_pool.state_dir("conv") / "judge.json").write_text(json.dumps(
-            {"port": srv.server_address[1], "token": "robado"}), encoding="utf-8")
+            {"port": srv.server_address[1], "token": "stolen"}), encoding="utf-8")
         try:
-            if judge_pool.ask("conv", "¿permitir?", "modelo", 5) is not None:
+            if judge_pool.ask("conv", "¿permitir?", "model", 5) is not None:
                 failures.append("juez precargado: aceptó un veredicto sin firma válida")
         finally:
             judge_pool.STATE_ROOT = original
@@ -263,7 +263,7 @@ def test_backend_agy() -> list[str]:
     return failures
 
 
-def test_alcance_y_respaldo() -> list[str]:
+def test_scope_and_backup() -> list[str]:
     """Fiscalización de lecturas, objetivo del trabajo y capturas del proyecto."""
     failures = []
     from pretooluse import command_targets_outside
@@ -273,48 +273,48 @@ def test_alcance_y_respaldo() -> list[str]:
 
     # 1. Rastreo de rutas fuera del proyecto dentro de un comando.
     ws = [ROOT]
-    dentro = [
+    inside = [
         "python consultas/explorar.py",
         "uv run python analisis.py --salida ./out/fig.png",
         'python -c "import duckdb; duckdb.connect(\'datos.db\')"',
         "python script.py --url https://ejemplo.com/api/v1",
     ]
-    fuera = [
+    outside = [
         'python -c "import os; print(os.listdir(\'C:/Users/gusta\'))"',
         'python -c "open(\'/etc/passwd\')"',
         'python -c "import shutil; shutil.copy(\'x\', \'../../otro/\')"',
     ]
-    for cmd in dentro:
+    for cmd in inside:
         if command_targets_outside(cmd, ws):
             failures.append(f"command_targets_outside: marcó fuera algo del proyecto: {cmd[:60]}")
-    for cmd in fuera:
+    for cmd in outside:
         if not command_targets_outside(cmd, ws):
             failures.append(f"command_targets_outside: no detectó la salida del proyecto: {cmd[:60]}")
 
     # 2. Lectura fuera del proyecto: se fiscaliza en vez de aprobarse en seco.
-    for tool, args, etiqueta in [
+    for tool, args, label in [
         ("list_directory", {"Path": str(pathlib.Path(ROOT).parent)}, "carpeta superior"),
         ("view_file", {"AbsolutePath": r"C:\Windows\System32\drivers\etc\hosts"}, "archivo del sistema"),
     ]:
         got, _ = invoke(tool, args, f"alcance_{tool}", mode="plan")
         if got == "allow":
-            failures.append(f"lectura fuera ({etiqueta}): se aprobó sin fiscalizar")
+            failures.append(f"lectura fuera ({label}): se aprobó sin fiscalizar")
 
     # 3. Lectura dentro del proyecto: sigue siendo libre y sin consultar a nadie.
-    got, motivo = invoke("view_file", {"AbsolutePath": f"{ROOT}/README.md"}, "alcance_dentro", mode="plan")
+    got, reason = invoke("view_file", {"AbsolutePath": f"{ROOT}/README.md"}, "scope_inside", mode="plan")
     if got != "allow":
-        failures.append(f"lectura dentro del proyecto: esperaba allow, obtuvo {got} ({motivo})")
+        failures.append(f"lectura dentro del proyecto: esperaba allow, obtuvo {got} ({reason})")
 
     # 4. Búsqueda de credenciales por herramienta, no solo por shell.
-    got, _ = invoke("grep_search", {"Query": "API_KEY", "Path": ROOT}, "alcance_secretos", mode="plan")
+    got, _ = invoke("grep_search", {"Query": "API_KEY", "Path": ROOT}, "scope_secrets", mode="plan")
     if got != "deny":
         failures.append(f"grep de credenciales: esperaba deny, obtuvo {got}")
 
     # 5. La captura recoge el árbol completo, incluidos archivos sin seguimiento.
     if is_repository(pathlib.Path(ROOT)):
         import tomllib
-        sensibles = tomllib.load((HERE / "policy.toml").open("rb"))["paths"]["sensitive"]
-        ok, sha, _ = create_checkpoint(pathlib.Path(ROOT), "selftest_checkpoint", sensibles)
+        sensitive = tomllib.load((HERE / "policy.toml").open("rb"))["paths"]["sensitive"]
+        ok, sha, _ = create_checkpoint(pathlib.Path(ROOT), "selftest_checkpoint", sensitive)
         if not ok:
             failures.append(f"create_checkpoint: falló ({sha})")
         else:
@@ -331,74 +331,74 @@ def test_alcance_y_respaldo() -> list[str]:
         failures.append("el repositorio de pruebas no es un repo git: no se pudo verificar la captura")
 
     # 5b. Un registro de capturas copiado de otro proyecto no vale como respaldo.
-    with tempfile.TemporaryDirectory() as nuevo:
-        proyecto = pathlib.Path(nuevo) / "proyecto"
-        proyecto.mkdir()
-        (proyecto / "main.py").write_text("x = 1\n", encoding="utf-8")
-        subprocess.run(["git", "init", "-q"], cwd=str(proyecto), capture_output=True)
-        estado = pathlib.Path(nuevo) / "estado"
-        estado.mkdir()
-        conv = "conversacion_heredada"
-        (estado / "checkpoints.json").write_text(json.dumps({
+    with tempfile.TemporaryDirectory() as workdir:
+        project = pathlib.Path(workdir) / "project"
+        project.mkdir()
+        (project / "main.py").write_text("x = 1\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=str(project), capture_output=True)
+        state = pathlib.Path(workdir) / "state"
+        state.mkdir()
+        conv = "inherited_conversation"
+        (state / "checkpoints.json").write_text(json.dumps({
             conv: {"sha": "0" * 40, "ts": datetime.now().isoformat(timespec="seconds"),
-                   "ref": "refs/automode/conversacion_heredada",
-                   "root": str(pathlib.Path(nuevo) / "otro_proyecto")},
+                   "ref": "refs/automode/inherited_conversation",
+                   "root": str(pathlib.Path(workdir) / "other_project")},
         }), encoding="utf-8")
 
-        respaldado, detalle = ensure_checkpoint(proyecto, conv, estado)
-        if not respaldado:
-            failures.append(f"registro heredado: no se recapturó ({detalle})")
-        elif "vigente" in detalle:
+        backed_up, detail = ensure_checkpoint(project, conv, state)
+        if not backed_up:
+            failures.append(f"registro heredado: no se recapturó ({detail})")
+        elif "vigente" in detail:
             failures.append("registro heredado: se aceptó una captura de otro proyecto como respaldo")
-        elif not ref_exists(proyecto, "refs/automode/conversacion_heredada"):
+        elif not ref_exists(project, "refs/automode/inherited_conversation"):
             failures.append("registro heredado: se afirmó respaldo sin crear la referencia")
 
     # 5c. Los archivos pesados quedan fuera de la captura, y restaurar no los pisa ni los borra.
     with tempfile.TemporaryDirectory() as tmp:
-        proyecto = pathlib.Path(tmp)
+        project = pathlib.Path(tmp)
         git = lambda *a: subprocess.run(["git", *a], cwd=tmp, capture_output=True, text=True)
         git("init", "-q")
-        (proyecto / "pesado_seguido.bin").write_bytes(b"v1" * 2000)
-        (proyecto / "chico.txt").write_text("original\n", encoding="utf-8")
+        (project / "heavy_tracked.bin").write_bytes(b"v1" * 2000)
+        (project / "small.txt").write_text("original\n", encoding="utf-8")
         git("add", "-A")
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
-        (proyecto / "pesado_suelto.bin").write_bytes(b"x" * 5000)
-        (proyecto / "pesado_seguido.bin").write_bytes(b"v2" * 2000)
-        ok, sha, omitidos = create_checkpoint(proyecto, "pesados", max_file_bytes=1000)
-        arbol = git("ls-tree", "-r", "--name-only", sha).stdout.split() if ok else []
-        if not ok or sorted(omitidos) != ["pesado_seguido.bin", "pesado_suelto.bin"]:
-            failures.append(f"capturas: omitidos inesperados ({omitidos})")
-        elif "pesado_suelto.bin" in arbol or "chico.txt" not in arbol:
-            failures.append(f"capturas: el filtro de tamaño no se aplicó ({arbol})")
+        (project / "heavy_untracked.bin").write_bytes(b"x" * 5000)
+        (project / "heavy_tracked.bin").write_bytes(b"v2" * 2000)
+        ok, sha, skipped = create_checkpoint(project, "heavy_files", max_file_bytes=1000)
+        tree = git("ls-tree", "-r", "--name-only", sha).stdout.split() if ok else []
+        if not ok or sorted(skipped) != ["heavy_tracked.bin", "heavy_untracked.bin"]:
+            failures.append(f"capturas: omitidos inesperados ({skipped})")
+        elif "heavy_untracked.bin" in tree or "small.txt" not in tree:
+            failures.append(f"capturas: el filtro de tamaño no se aplicó ({tree})")
         else:
-            (proyecto / "chico.txt").write_text("cambiado\n", encoding="utf-8")
-            orden = ["git", "restore", f"--source={sha}", "--", "."]
-            git(*orden[1:], *[f":(exclude){r}" for r in omitidos])
-            if (proyecto / "chico.txt").read_text(encoding="utf-8") != "original\n":
+            (project / "small.txt").write_text("cambiado\n", encoding="utf-8")
+            restore_cmd = ["git", "restore", f"--source={sha}", "--", "."]
+            git(*restore_cmd[1:], *[f":(exclude){r}" for r in skipped])
+            if (project / "small.txt").read_text(encoding="utf-8") != "original\n":
                 failures.append("capturas: la restauración no recuperó el archivo pequeño")
-            if (proyecto / "pesado_seguido.bin").read_bytes()[:2] != b"v2":
+            if (project / "heavy_tracked.bin").read_bytes()[:2] != b"v2":
                 failures.append("capturas: la restauración pisó un archivo pesado omitido")
-            if not (proyecto / "pesado_suelto.bin").exists():
+            if not (project / "heavy_untracked.bin").exists():
                 failures.append("capturas: la restauración borró un archivo pesado omitido")
 
     # 5d. Solo se conservan las capturas de las últimas conversaciones.
     with tempfile.TemporaryDirectory() as tmp:
-        proyecto = pathlib.Path(tmp)
+        project = pathlib.Path(tmp)
         subprocess.run(["git", "init", "-q"], cwd=tmp, capture_output=True)
-        (proyecto / "a.txt").write_text("a\n", encoding="utf-8")
+        (project / "a.txt").write_text("a\n", encoding="utf-8")
         for conv in ("conv_1", "conv_2", "conv_3"):
-            ensure_checkpoint(proyecto, conv, proyecto / ".estado" / conv, keep_last=2)
-        restantes = subprocess.run(
+            ensure_checkpoint(project, conv, project / ".state" / conv, keep_last=2)
+        remaining = subprocess.run(
             ["git", "for-each-ref", "--format=%(refname)", "refs/automode"],
             cwd=tmp, capture_output=True, text=True).stdout.split()
-        if len(restantes) != 2 or "refs/automode/conv_3" not in restantes:
-            failures.append(f"capturas: la limpieza de referencias viejas falló ({restantes})")
+        if len(remaining) != 2 or "refs/automode/conv_3" not in remaining:
+            failures.append(f"capturas: la limpieza de referencias viejas falló ({remaining})")
 
     # 6. Sin respaldo posible, la edición no se aprueba.
-    with tempfile.TemporaryDirectory() as sin_git:
-        payload_dir = str(pathlib.Path(sin_git).resolve())
-        got, motivo = invoke(
-            "propose_code", {"TargetFile": f"{payload_dir}/x.py"}, "alcance_sin_git", mode="auto",
+    with tempfile.TemporaryDirectory() as non_repo:
+        payload_dir = str(pathlib.Path(non_repo).resolve())
+        got, reason = invoke(
+            "propose_code", {"TargetFile": f"{payload_dir}/x.py"}, "scope_non_repo", mode="auto",
             extra_env={"AGY_AUTOMODE_WS": payload_dir},
         )
         # El workspace sigue siendo ROOT: la escritura cae fuera y no debe aprobarse a ciegas.
@@ -406,17 +406,17 @@ def test_alcance_y_respaldo() -> list[str]:
             failures.append("escritura fuera del proyecto sin respaldo: se aprobó")
 
     # 7. El motivo de "sin respaldo" dice cómo resolverlo: `git init`.
-    with tempfile.TemporaryDirectory() as sin_git:
-        proyecto = pathlib.Path(sin_git) / "proyecto_sin_git"
-        proyecto.mkdir()
+    with tempfile.TemporaryDirectory() as non_repo:
+        project = pathlib.Path(non_repo) / "non_repo_project"
+        project.mkdir()
         payload = {
             "toolCall": {"name": "write_to_file",
-                         "args": {"TargetFile": str(proyecto / "nuevo.py")}},
-            "stepIdx": 1, "conversationId": "sin_repositorio",
-            "workspacePaths": [str(proyecto)],
+                         "args": {"TargetFile": str(project / "new.py")}},
+            "stepIdx": 1, "conversationId": "non_repo",
+            "workspacePaths": [str(project)],
         }
         env = dict(os.environ)
-        env.update({"AGY_AUTOMODE_STATE": str(pathlib.Path(sin_git) / "estado"),
+        env.update({"AGY_AUTOMODE_STATE": str(pathlib.Path(non_repo) / "state"),
                     "AGY_MODE": "auto", "AGY_AUTOMODE_BACKEND": "none",
                     "PYTHONIOENCODING": "utf-8"})
         proc = subprocess.run(
@@ -425,58 +425,58 @@ def test_alcance_y_respaldo() -> list[str]:
             cwd=str(HERE), env=env,
         )
         try:
-            salida = json.loads((proc.stdout or "").strip().splitlines()[-1])
+            output = json.loads((proc.stdout or "").strip().splitlines()[-1])
         except (ValueError, IndexError):
-            salida = {}
-        if salida.get("decision") != "deny":
+            output = {}
+        if output.get("decision") != "deny":
             failures.append(
-                f"proyecto sin git: esperaba deny, obtuvo {salida.get('decision')}")
-        elif "git init" not in (salida.get("reason") or ""):
+                f"proyecto sin git: esperaba deny, obtuvo {output.get('decision')}")
+        elif "git init" not in (output.get("reason") or ""):
             failures.append(
-                f"proyecto sin git: la denegación no dice cómo resolverlo ({salida.get('reason')})")
+                f"proyecto sin git: la denegación no dice cómo resolverlo ({output.get('reason')})")
 
     return failures
 
 
-def test_fase_por_conversacion() -> list[str]:
+def test_phase_detection() -> list[str]:
     """La fase la marca la persona en la conversación, no una variable aparte."""
     failures = []
     import tomllib
     from transcript import detect_phase
-    modo = tomllib.load((HERE / "policy.toml").open("rb"))["mode"]
+    mode_cfg = tomllib.load((HERE / "policy.toml").open("rb"))["mode"]
 
-    def transcripcion(mensajes, nombre):
-        p = pathlib.Path(STATE_DIR) / f"fase_{nombre}.jsonl"
-        with p.open("w", encoding="utf-8") as fh:
-            for i, m in enumerate(mensajes):
+    def write_transcript(messages, name):
+        path = pathlib.Path(STATE_DIR) / f"fase_{name}.jsonl"
+        with path.open("w", encoding="utf-8") as fh:
+            for i, message in enumerate(messages):
                 fh.write(json.dumps({
                     "step_index": i, "source": "USER_EXPLICIT", "type": "USER_INPUT",
-                    "content": "<USER_REQUEST>\n" + m,
+                    "content": "<USER_REQUEST>\n" + message,
                 }) + "\n")
-        return str(p)
+        return str(path)
 
-    guiones = [
+    scenarios = [
         ("plan", ["/plan Quiero una herramienta de analisis ambiental"], "plan"),
-        ("aprobado", ["/plan Quiero una herramienta", "Aprobado, ejecutalo en modo automatico"], "auto"),
+        ("approved", ["/plan Quiero una herramienta", "Aprobado, ejecutalo en modo automatico"], "auto"),
         ("replan", ["/plan A", "ejecutalo en modo automatico", "/plan Replanteemos"], "plan"),
-        ("barra_auto", ["/plan A", "/auto"], "auto"),
-        ("sin_marca", ["Revisa los datos de la base"], None),
+        ("slash_auto", ["/plan A", "/auto"], "auto"),
+        ("unmarked", ["Revisa los datos de la base"], None),
     ]
-    for nombre, mensajes, esperado in guiones:
-        got = detect_phase(transcripcion(mensajes, nombre), modo["plan_triggers"], modo["auto_triggers"])
-        if got != esperado:
-            failures.append(f"detect_phase [{nombre}]: esperaba {esperado}, obtuvo {got}")
+    for name, messages, expected in scenarios:
+        got = detect_phase(write_transcript(messages, name), mode_cfg["plan_triggers"], mode_cfg["auto_triggers"])
+        if got != expected:
+            failures.append(f"detect_phase [{name}]: esperaba {expected}, obtuvo {got}")
 
     # La misma edición: en plan va al clasificador (aquí `deny`); tras aprobar, se permite.
-    for nombre, mensajes, esperado in [
-        ("planeando", ["/plan Quiero una herramienta"], "deny"),
-        ("ejecutando", ["/plan Quiero una herramienta", "Aprobado, ejecutalo en modo automatico"], "allow"),
+    for name, messages, expected in [
+        ("planning", ["/plan Quiero una herramienta"], "deny"),
+        ("executing", ["/plan Quiero una herramienta", "Aprobado, ejecutalo en modo automatico"], "allow"),
     ]:
         # Sin invoke(), que fija AGY_MODE: aquí debe mandar la conversación.
         payload = {
             "toolCall": {"name": "write_to_file", "args": {"TargetFile": f"{ROOT}/x.py"}},
-            "stepIdx": 9, "conversationId": f"fase_e2e_{nombre}", "workspacePaths": [ROOT],
-            "transcriptPath": transcripcion(mensajes, "e2e_" + nombre),
+            "stepIdx": 9, "conversationId": f"phase_e2e_{name}", "workspacePaths": [ROOT],
+            "transcriptPath": write_transcript(messages, "e2e_" + name),
         }
         env = {k: v for k, v in os.environ.items() if k != "AGY_MODE"}
         env.update({"AGY_AUTOMODE_STATE": STATE_DIR, "PYTHONIOENCODING": "utf-8",
@@ -490,8 +490,8 @@ def test_fase_por_conversacion() -> list[str]:
             got = json.loads(proc.stdout)["decision"]
         except (ValueError, KeyError):
             got = f"<salida inválida: {proc.stdout[:60]}>"
-        if got != esperado:
-            failures.append(f"fase de extremo a extremo [{nombre}]: esperaba {esperado}, obtuvo {got}")
+        if got != expected:
+            failures.append(f"fase de extremo a extremo [{name}]: esperaba {expected}, obtuvo {got}")
 
     return failures
 
@@ -542,33 +542,33 @@ def main() -> int:
         failures.append(f"recuperación: esperaba allow, obtuvo {recovery}")
 
     # Las denegaciones técnicas no cuentan para el cortacircuitos.
-    tecnicas = [
-        invoke("made_up_tool", {"X": f"y{i}"}, "case_breaker_tecnico", mode="auto")
+    technical = [
+        invoke("made_up_tool", {"X": f"y{i}"}, "case_breaker_technical", mode="auto")
         for i in range(4)
     ]
-    ok_tecnicas = all(d == "deny" for d, _ in tecnicas)
-    print(f"  {'ok  ' if ok_tecnicas else 'FALLA'}  {'fallo técnico no escala':<30} -> "
-          f"{', '.join(d for d, _ in tecnicas)}")
-    if not ok_tecnicas:
+    ok_technical = all(d == "deny" for d, _ in technical)
+    print(f"  {'ok  ' if ok_technical else 'FALLA'}  {'fallo técnico no escala':<30} -> "
+          f"{', '.join(d for d, _ in technical)}")
+    if not ok_technical:
         failures.append(
             "cortacircuitos: una denegación por fallo del clasificador escaló a force_ask "
-            f"({[d for d, _ in tecnicas]})"
+            f"({[d for d, _ in technical]})"
         )
 
     print("\n--- BATERÍA 5: ALCANCE DEL TRABAJO Y RESPALDO ---")
-    alcance_failures = test_alcance_y_respaldo()
-    if alcance_failures:
-        failures.extend(alcance_failures)
-        for f in alcance_failures:
+    scope_failures = test_scope_and_backup()
+    if scope_failures:
+        failures.extend(scope_failures)
+        for f in scope_failures:
             print(f"  FALLA  {f}")
     else:
         print("  ok    lecturas fiscalizadas, secretos bloqueados y capturas verificadas")
 
     print("\n--- BATERÍA 6: FASE SEGÚN LA CONVERSACIÓN ---")
-    fase_failures = test_fase_por_conversacion()
-    if fase_failures:
-        failures.extend(fase_failures)
-        for f in fase_failures:
+    phase_failures = test_phase_detection()
+    if phase_failures:
+        failures.extend(phase_failures)
+        for f in phase_failures:
             print(f"  FALLA  {f}")
     else:
         print("  ok    /plan y la frase de aprobación gobiernan el modo")
@@ -596,14 +596,14 @@ def main() -> int:
 
 def prepare_repo() -> None:
     """Llena el proyecto desechable: código, un README y un `.env` que no debe capturarse."""
-    raiz = pathlib.Path(ROOT)
-    (raiz / "main.py").write_text("print('hola')\n", encoding="utf-8")
-    (raiz / "README.md").write_text("# Proyecto de prueba\n", encoding="utf-8")
-    (raiz / ".env").write_text("APP_SECRET=prueba\n", encoding="utf-8")
+    root = pathlib.Path(ROOT)
+    (root / "main.py").write_text("print('hola')\n", encoding="utf-8")
+    (root / "README.md").write_text("# Proyecto de prueba\n", encoding="utf-8")
+    (root / ".env").write_text("APP_SECRET=prueba\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=ROOT, capture_output=True)
 
 
-def _forzar_borrado(func, path, _exc):
+def _force_delete(func, path, _exc):
     # git deja sus objetos en solo lectura y en Windows rmtree no los borra sin esto.
     os.chmod(path, stat.S_IWRITE)
     func(path)
@@ -616,5 +616,5 @@ if __name__ == "__main__":
         code = main()
     finally:
         shutil.rmtree(STATE_DIR, ignore_errors=True)
-        shutil.rmtree(ROOT, onexc=_forzar_borrado)
+        shutil.rmtree(ROOT, onexc=_force_delete)
     sys.exit(code)

@@ -18,9 +18,9 @@ STATE_ROOT = pathlib.Path(os.path.expanduser("~/.gemini/automode"))
 INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
 
 # Agente propio sin herramientas: sin él, agy añade ~10.000 tokens de su prompt a cada juicio.
-AGENT = "automode-juez"
+AGENT = "automode-judge"
 AGENT_MD = """---
-name: automode-juez
+name: automode-judge
 description: Juez de seguridad del auto mode, sin herramientas.
 tools: []
 mainAgent: true
@@ -35,16 +35,16 @@ def state_dir(conversation: str) -> pathlib.Path:
     return STATE_ROOT / re.sub(r"[^A-Za-z0-9_-]", "_", conversation)[:64]
 
 
-def write_agent(carpeta: str) -> list[str]:
+def write_agent(folder: str) -> list[str]:
     """Deja el agente del juez en la carpeta de trabajo y devuelve los argumentos para usarlo."""
-    ruta = pathlib.Path(carpeta) / ".agents" / "agents"
-    ruta.mkdir(parents=True, exist_ok=True)
-    (ruta / f"{AGENT}.md").write_text(AGENT_MD, encoding="utf-8")
+    path = pathlib.Path(folder) / ".agents" / "agents"
+    path.mkdir(parents=True, exist_ok=True)
+    (path / f"{AGENT}.md").write_text(AGENT_MD, encoding="utf-8")
     return ["--agent", AGENT]
 
 
-def _firma(token: str, nonce: str, texto: str) -> str:
-    return hmac.new(token.encode(), (nonce + texto).encode("utf-8"), hashlib.sha256).hexdigest()
+def _sign(token: str, nonce: str, text: str) -> str:
+    return hmac.new(token.encode(), (nonce + text).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,61 +56,61 @@ def ask(conversation: str, prompt: str, model: str, timeout: float) -> dict | No
     if not conversation:
         return None
     try:
-        estado = json.loads((state_dir(conversation) / "judge.json").read_text(encoding="utf-8"))
-        token, puerto = estado["token"], int(estado["port"])
+        state = json.loads((state_dir(conversation) / "judge.json").read_text(encoding="utf-8"))
+        token, port = state["token"], int(state["port"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
     nonce = secrets.token_hex(16)
-    peticion = {"token": token, "nonce": nonce, "model": model, "prompt": prompt,
+    request = {"token": token, "nonce": nonce, "model": model, "prompt": prompt,
                 "timeout": timeout}
     try:
-        with socket.create_connection(("127.0.0.1", puerto), timeout=1.0) as s:
-            s.settimeout(timeout + 5)
-            s.sendall((json.dumps(peticion) + "\n").encode("utf-8"))
-            datos = b""
-            while not datos.endswith(b"\n"):
-                trozo = s.recv(65536)
-                if not trozo:
+        with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
+            sock.settimeout(timeout + 5)
+            sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = sock.recv(65536)
+                if not chunk:
                     break
-                datos += trozo
-        respuesta = json.loads(datos.decode("utf-8"))
+                data += chunk
+        response = json.loads(data.decode("utf-8"))
     except (OSError, ValueError):
         return None
-    envoltura = respuesta.get("envelope")
-    texto = json.dumps(envoltura, sort_keys=True, ensure_ascii=False)
-    if not isinstance(envoltura, dict) or not hmac.compare_digest(
-            str(respuesta.get("mac", "")), _firma(token, nonce, texto)):
+    envelope = response.get("envelope")
+    text = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
+    if not isinstance(envelope, dict) or not hmac.compare_digest(
+            str(response.get("mac", "")), _sign(token, nonce, text)):
         return None
-    return envoltura
+    return envelope
 
 
 def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
     """Arranca el auxiliar de la conversación si no hay uno. No espera a que esté listo."""
     if not conversation:
         return
-    carpeta = state_dir(conversation)
-    candado = carpeta / "judge.lock"
+    folder = state_dir(conversation)
+    lock_file = folder / "judge.lock"
     try:
-        carpeta.mkdir(parents=True, exist_ok=True)
+        folder.mkdir(parents=True, exist_ok=True)
         # Un solo arranque a la vez: el candado caduca por si un arranque anterior murió.
-        if candado.exists() and time.time() - candado.stat().st_mtime < 30:
+        if lock_file.exists() and time.time() - lock_file.stat().st_mtime < 30:
             return
-        candado.write_text(str(os.getpid()), encoding="utf-8")
+        lock_file.write_text(str(os.getpid()), encoding="utf-8")
         cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "serve",
                conversation, model, str(reuse_turns), str(idle_seconds)]
         # Carpeta propia: con la del hook, Windows no deja borrar ni renombrar el proyecto.
-        opciones = {"cwd": str(carpeta), "stdin": subprocess.DEVNULL,
+        options = {"cwd": str(folder), "stdin": subprocess.DEVNULL,
                     "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                     "close_fds": True}
         if os.name == "nt":
-            base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             # Salir del job de agy para que el auxiliar sobreviva a la llamada que lo lanzó.
             try:
-                subprocess.Popen(cmd, creationflags=base | 0x01000000, **opciones)
+                subprocess.Popen(cmd, creationflags=creation_flags | 0x01000000, **options)
             except OSError:
-                subprocess.Popen(cmd, creationflags=base, **opciones)
+                subprocess.Popen(cmd, creationflags=creation_flags, **options)
         else:
-            subprocess.Popen(cmd, start_new_session=True, **opciones)
+            subprocess.Popen(cmd, start_new_session=True, **options)
     except OSError:
         pass
 
@@ -119,52 +119,52 @@ def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds:
 # Servidor
 # ─────────────────────────────────────────────────────────────────────────────
 
-class Juez:
+class Judge:
     """Un `agy` en modo stream-json, arrancado y a la espera de acciones que juzgar."""
 
     def __init__(self, model: str):
         self.model = model
-        entorno = dict(os.environ)
-        entorno[INFLIGHT_VAR] = "1"  # sus propias herramientas las deniega el hook
-        self.cwd = tempfile.mkdtemp(prefix="automode_juez_")  # fuera de todo workspace
-        opciones = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        env = dict(os.environ)
+        env[INFLIGHT_VAR] = "1"  # sus propias herramientas las deniega el hook
+        self.cwd = tempfile.mkdtemp(prefix="automode_judge_")  # fuera de todo workspace
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         self.proc = subprocess.Popen(
             ["agy", "--input-format", "stream-json", "--output-format", "stream-json",
              "--model", model, "--disable-slash-commands", "--print="] + write_agent(self.cwd),
-            cwd=self.cwd, env=entorno, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
-            bufsize=1, **opciones)
-        self.eventos = []
-        self.turnos = 0
-        threading.Thread(target=self._leer, daemon=True).start()
+            bufsize=1, **options)
+        self.events = []
+        self.turns = 0
+        threading.Thread(target=self._read_output, daemon=True).start()
 
-    def _leer(self):
-        for linea in self.proc.stdout:
-            self.eventos.append(linea)
+    def _read_output(self):
+        for line in self.proc.stdout:
+            self.events.append(line)
 
-    def vivo(self) -> bool:
+    def is_alive(self) -> bool:
         return self.proc.poll() is None
 
-    def consultar(self, prompt: str, timeout: float) -> dict | None:
-        inicio = len(self.eventos)
+    def query(self, prompt: str, timeout: float) -> dict | None:
+        start = len(self.events)
         try:
             self.proc.stdin.write(json.dumps(
                 {"event": "user", "message": {"content": prompt}}, ensure_ascii=False) + "\n")
             self.proc.stdin.flush()
         except OSError:
             return None
-        limite = time.time() + timeout
-        while time.time() < limite and self.vivo():
-            for linea in self.eventos[inicio:]:
-                if '"event":"result"' in linea.replace(" ", ""):
+        deadline = time.time() + timeout
+        while time.time() < deadline and self.is_alive():
+            for line in self.events[start:]:
+                if '"event":"result"' in line.replace(" ", ""):
                     try:
-                        return json.loads(linea).get("result")
+                        return json.loads(line).get("result")
                     except ValueError:
                         return None
             time.sleep(0.05)
         return None
 
-    def cerrar(self):
+    def close(self):
         try:
             self.proc.kill()
             self.proc.wait(timeout=5)
@@ -179,91 +179,91 @@ class Pool:
     def __init__(self, model: str, reuse_turns: int):
         self.model, self.reuse_turns = model, max(1, reuse_turns)
         self.lock = threading.Lock()
-        self.libres: list[Juez] = []
-        self.ultimo_uso = time.time()
-        self.reponer()
+        self.ready: list[Judge] = []
+        self.last_used = time.time()
+        self.replenish()
 
-    def reponer(self):
+    def replenish(self):
         with self.lock:
-            self.libres = [j for j in self.libres if j.vivo()]
-            if not self.libres:
-                self.libres.append(Juez(self.model))
+            self.ready = [judge for judge in self.ready if judge.is_alive()]
+            if not self.ready:
+                self.ready.append(Judge(self.model))
 
-    def tomar(self, model: str) -> Juez:
+    def acquire(self, model: str) -> Judge:
         with self.lock:
-            self.ultimo_uso = time.time()
+            self.last_used = time.time()
             if model == self.model:
-                self.libres = [j for j in self.libres if j.vivo()]
-                if self.libres:
-                    return self.libres.pop(0)
-        return Juez(model)
+                self.ready = [judge for judge in self.ready if judge.is_alive()]
+                if self.ready:
+                    return self.ready.pop(0)
+        return Judge(model)
 
-    def devolver(self, juez: Juez):
-        juez.turnos += 1
-        if juez.turnos < self.reuse_turns and juez.vivo() and juez.model == self.model:
+    def release(self, judge: Judge):
+        judge.turns += 1
+        if judge.turns < self.reuse_turns and judge.is_alive() and judge.model == self.model:
             with self.lock:
-                self.libres.append(juez)
+                self.ready.append(judge)
         else:
-            juez.cerrar()
-        threading.Thread(target=self.reponer, daemon=True).start()
+            judge.close()
+        threading.Thread(target=self.replenish, daemon=True).start()
 
-    def cerrar(self):
+    def close(self):
         with self.lock:
-            for j in self.libres:
-                j.cerrar()
-            self.libres = []
+            for judge in self.ready:
+                judge.close()
+            self.ready = []
 
 
 def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
-    carpeta = state_dir(conversation)
-    carpeta.mkdir(parents=True, exist_ok=True)
-    archivo = carpeta / "judge.json"
+    folder = state_dir(conversation)
+    folder.mkdir(parents=True, exist_ok=True)
+    state_file = folder / "judge.json"
     token = secrets.token_hex(32)
     pool = Pool(model, reuse_turns)
 
-    class Manejador(socketserver.StreamRequestHandler):
+    class Handler(socketserver.StreamRequestHandler):
         def handle(self):
             try:
-                pet = json.loads(self.rfile.readline().decode("utf-8"))
+                request = json.loads(self.rfile.readline().decode("utf-8"))
             except ValueError:
                 return
-            if not hmac.compare_digest(str(pet.get("token", "")), token):
+            if not hmac.compare_digest(str(request.get("token", "")), token):
                 return
-            juez = pool.tomar(str(pet.get("model") or model))
-            envoltura = juez.consultar(str(pet.get("prompt", "")), float(pet.get("timeout", 30)))
-            pool.devolver(juez)
-            if envoltura is None:
-                envoltura = {"status": "ERROR", "response": "",
+            judge = pool.acquire(str(request.get("model") or model))
+            envelope = judge.query(str(request.get("prompt", "")), float(request.get("timeout", 30)))
+            pool.release(judge)
+            if envelope is None:
+                envelope = {"status": "ERROR", "response": "",
                              "error": "el juez precargado no respondió"}
-            texto = json.dumps(envoltura, sort_keys=True, ensure_ascii=False)
-            salida = {"envelope": envoltura, "mac": _firma(token, str(pet.get("nonce", "")), texto)}
-            self.wfile.write((json.dumps(salida, ensure_ascii=False) + "\n").encode("utf-8"))
+            text = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
+            payload = {"envelope": envelope, "mac": _sign(token, str(request.get("nonce", "")), text)}
+            self.wfile.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
 
-    class Servidor(socketserver.ThreadingTCPServer):
+    class Server(socketserver.ThreadingTCPServer):
         daemon_threads = True
         allow_reuse_address = False
 
-    with Servidor(("127.0.0.1", 0), Manejador) as srv:
-        estado = {"port": srv.server_address[1], "token": token, "pid": os.getpid(),
+    with Server(("127.0.0.1", 0), Handler) as srv:
+        state = {"port": srv.server_address[1], "token": token, "pid": os.getpid(),
                   "model": model, "conversation": conversation}
-        tmp = archivo.with_suffix(".tmp")
-        tmp.write_text(json.dumps(estado), encoding="utf-8")
-        os.replace(tmp, archivo)
+        tmp = state_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, state_file)
         try:
-            (carpeta / "judge.lock").unlink(missing_ok=True)
+            (folder / "judge.lock").unlink(missing_ok=True)
         except OSError:
             pass
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
-            while time.time() - pool.ultimo_uso < idle_seconds:
+            while time.time() - pool.last_used < idle_seconds:
                 time.sleep(5)
         finally:
             srv.shutdown()
-            pool.cerrar()
+            pool.close()
             try:
-                if json.loads(archivo.read_text(encoding="utf-8")).get("pid") == os.getpid():
-                    archivo.unlink()
-                    shutil.rmtree(carpeta, ignore_errors=True)
+                if json.loads(state_file.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                    state_file.unlink()
+                    shutil.rmtree(folder, ignore_errors=True)
             except (OSError, ValueError):
                 pass
 
