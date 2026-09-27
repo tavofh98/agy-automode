@@ -1,28 +1,33 @@
-"""Juez de repuesto: evita que cada consulta pague el arranque de `agy`.
+"""Juez de repuesto: evita que cada acción juzgada pague el arranque de `agy`.
 
-Arrancar `agy` cuesta ~4 s de los ~6 que tarda una consulta en frío. Este proceso auxiliar
-mantiene un `agy` en modo stream-json ya arrancado; cada consulta la atiende un juez
-nuevo, que se descarta después, mientras en segundo plano se prepara el siguiente.
+Arrancar `agy` cuesta ~4 s de los ~7 que tarda un juicio en frío. Cada conversación tiene su
+propio proceso auxiliar, que mantiene un `agy` en modo stream-json ya arrancado: cada acción
+la juzga un juez nuevo, que se descarta después, mientras en segundo plano se prepara el
+siguiente.
 
-Un juez por consulta es deliberado: un `agy` que atiende varias consultas recuerda las
-anteriores, incluidos los argumentos que redacta el agente, y un texto malicioso quedaría
-en su contexto para las decisiones siguientes. `reuse_turns` lo permite a cambio de ese
-riesgo; por defecto cada juicio empieza de cero.
+Un auxiliar por conversación: cada una tiene su tarea, su configuración y sus jueces, y
+ningún juez atiende acciones de dos conversaciones.
+
+Un juez por acción: un `agy` que juzga varias acciones recuerda las anteriores, incluidos
+los argumentos que redacta el agente. `reuse_turns` lo permite dentro de la conversación;
+por defecto cada juicio empieza de cero.
 
 Seguridad del canal:
 - Escucha solo en 127.0.0.1.
-- Un secreto aleatorio, en `~/.gemini/automode/`, autentica a las dos partes: el servidor
-  rechaza peticiones sin él y el hook rechaza respuestas no firmadas. Un servidor falso
-  que respondiera "allow" a todo no sabría firmar, y el hook volvería al método en frío.
+- Un secreto aleatorio por conversación, en `~/.gemini/automode/<conversación>/`, autentica a
+  las dos partes: el servidor rechaza peticiones sin él y el hook rechaza respuestas no
+  firmadas. Un servidor falso que respondiera "allow" a todo no sabría firmar.
 - Si el auxiliar falla, `classifier_agy.py` juzga en frío: el auxiliar solo acelera.
 
-Uso interno: `python judge_pool.py serve <modelo> <reuse_turns> <idle_seconds>`.
+Uso interno: `python judge_pool.py serve <conversación> <modelo> <reuse_turns> <idle_seconds>`.
+Se apaga tras `idle_seconds` sin acciones; cada acción juzgada reinicia el plazo.
 """
 import hashlib
 import hmac
 import json
 import os
 import pathlib
+import re
 import secrets
 import shutil
 import socket
@@ -33,10 +38,12 @@ import tempfile
 import threading
 import time
 
-STATE_DIR = pathlib.Path(os.path.expanduser("~/.gemini/automode"))
-STATE_FILE = STATE_DIR / "judge.json"
-LOCK_FILE = STATE_DIR / "judge.lock"
+STATE_ROOT = pathlib.Path(os.path.expanduser("~/.gemini/automode"))
 INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
+
+
+def state_dir(conversation: str) -> pathlib.Path:
+    return STATE_ROOT / re.sub(r"[^A-Za-z0-9_-]", "_", conversation)[:64]
 
 
 def _firma(token: str, nonce: str, texto: str) -> str:
@@ -47,13 +54,16 @@ def _firma(token: str, nonce: str, texto: str) -> str:
 # Cliente (lo usa el hook)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def ask(prompt: str, model: str, timeout: float) -> dict | None:
-    """Consulta al juez de repuesto. Devuelve la envoltura de agy o None si no hay servidor.
+def ask(conversation: str, prompt: str, model: str, timeout: float) -> dict | None:
+    """Consulta al juez de la conversación. Devuelve la envoltura de agy o None.
 
-    None significa "juzga en frío": servidor ausente, caído, lento o no autenticado.
+    None significa "juzga en frío": sin conversación, servidor ausente, caído, lento o no
+    autenticado.
     """
+    if not conversation:
+        return None
     try:
-        estado = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        estado = json.loads((state_dir(conversation) / "judge.json").read_text(encoding="utf-8"))
         token, puerto = estado["token"], int(estado["port"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -81,20 +91,25 @@ def ask(prompt: str, model: str, timeout: float) -> dict | None:
     return envoltura
 
 
-def ensure_server(model: str, reuse_turns: int, idle_seconds: int) -> None:
-    """Arranca el auxiliar en segundo plano si no hay uno. No espera a que esté listo."""
+def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
+    """Arranca el auxiliar de la conversación si no hay uno. No espera a que esté listo."""
+    if not conversation:
+        return
+    carpeta = state_dir(conversation)
+    candado = carpeta / "judge.lock"
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        carpeta.mkdir(parents=True, exist_ok=True)
         # Un solo arranque a la vez: el candado caduca por si un arranque anterior murió.
-        if LOCK_FILE.exists() and time.time() - LOCK_FILE.stat().st_mtime < 30:
+        if candado.exists() and time.time() - candado.stat().st_mtime < 30:
             return
-        LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
+        candado.write_text(str(os.getpid()), encoding="utf-8")
         cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "serve",
-               model, str(reuse_turns), str(idle_seconds)]
+               conversation, model, str(reuse_turns), str(idle_seconds)]
         # Carpeta propia: heredar la del hook dejaría el proyecto bloqueado (en Windows no
         # se puede borrar ni renombrar una carpeta que un proceso vivo usa como cwd).
-        opciones = {"cwd": str(STATE_DIR), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
-                    "stderr": subprocess.DEVNULL, "close_fds": True}
+        opciones = {"cwd": str(carpeta), "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+                    "close_fds": True}
         if os.name == "nt":
             base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             # agy puede agrupar el hook en un job que se cierra con él: se intenta salir
@@ -114,7 +129,7 @@ def ensure_server(model: str, reuse_turns: int, idle_seconds: int) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Juez:
-    """Un `agy` en modo stream-json, arrancado y a la espera de su consulta."""
+    """Un `agy` en modo stream-json, arrancado y a la espera de acciones que juzgar."""
 
     def __init__(self, model: str):
         self.model = model
@@ -168,6 +183,8 @@ class Juez:
 
 
 class Pool:
+    """Los jueces de una conversación: uno de repuesto esperando, uno por acción."""
+
     def __init__(self, model: str, reuse_turns: int):
         self.model, self.reuse_turns = model, max(1, reuse_turns)
         self.lock = threading.Lock()
@@ -206,8 +223,10 @@ class Pool:
             self.libres = []
 
 
-def serve(model: str, reuse_turns: int, idle_seconds: int) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
+def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
+    carpeta = state_dir(conversation)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    archivo = carpeta / "judge.json"
     token = secrets.token_hex(32)
     pool = Pool(model, reuse_turns)
 
@@ -235,12 +254,12 @@ def serve(model: str, reuse_turns: int, idle_seconds: int) -> None:
 
     with Servidor(("127.0.0.1", 0), Manejador) as srv:
         estado = {"port": srv.server_address[1], "token": token, "pid": os.getpid(),
-                  "model": model}
-        tmp = STATE_FILE.with_suffix(".tmp")
+                  "model": model, "conversation": conversation}
+        tmp = archivo.with_suffix(".tmp")
         tmp.write_text(json.dumps(estado), encoding="utf-8")
-        os.replace(tmp, STATE_FILE)
+        os.replace(tmp, archivo)
         try:
-            LOCK_FILE.unlink(missing_ok=True)
+            (carpeta / "judge.lock").unlink(missing_ok=True)
         except OSError:
             pass
         threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -251,11 +270,12 @@ def serve(model: str, reuse_turns: int, idle_seconds: int) -> None:
             srv.shutdown()
             pool.cerrar()
             try:
-                if json.loads(STATE_FILE.read_text(encoding="utf-8")).get("pid") == os.getpid():
-                    STATE_FILE.unlink()
+                if json.loads(archivo.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                    archivo.unlink()
+                    shutil.rmtree(carpeta, ignore_errors=True)
             except (OSError, ValueError):
                 pass
 
 
-if __name__ == "__main__" and len(sys.argv) >= 5 and sys.argv[1] == "serve":
-    serve(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
+if __name__ == "__main__" and len(sys.argv) >= 6 and sys.argv[1] == "serve":
+    serve(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))

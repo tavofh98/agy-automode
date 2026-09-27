@@ -84,6 +84,8 @@ POLICY_FILE = HERE / "policy.toml"
 # Estado de la conversación en curso. `main()` lo fija con `state_dir_for` antes de
 # decidir; este valor solo rige si la llamada no pudo leerse.
 STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "automode_sin_conversacion"
+# Conversación en curso: cada una tiene su propio juez de repuesto.
+CONVERSATION_ID = ""
 
 # Separadores de shell que encadenan acciones independientes.
 SEPARATORS = ("&&", "||", ";", "|", "\n")
@@ -467,6 +469,7 @@ def classify(
         state_dir=STATE_DIR,
         root_dir=root_dir,
         context=context,
+        conversation_id=CONVERSATION_ID,
     )
 
 
@@ -736,7 +739,7 @@ def respond(decision: str, reason: str, overrides: list | None = None) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    global STATE_DIR
+    global STATE_DIR, CONVERSATION_ID
     inicio = time.monotonic()
 
     # Guardia anti-recursión. Si esta variable está definida, quien nos invoca es el
@@ -766,6 +769,7 @@ def main() -> int:
         return 0
 
     STATE_DIR = state_dir_for(payload, policy)
+    CONVERSATION_ID = payload.get("conversationId") or ""
 
     try:
         decision, reason, rule = decide(payload, policy)

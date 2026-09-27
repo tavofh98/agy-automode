@@ -316,6 +316,7 @@ def classify_with_agy(
     state_dir: pathlib.Path,
     root_dir: pathlib.Path | None = None,
     context: dict | None = None,
+    conversation_id: str = "",
 ) -> tuple[str, str]:
     """Evalúa la tool call lanzando `agy --print`.
 
@@ -339,9 +340,9 @@ def classify_with_agy(
     # El juez de repuesto ahorra el arranque de agy. Si no hay uno listo se arranca para
     # la próxima consulta y esta se juzga en frío: el auxiliar solo acelera, no decide.
     if cfg.get("persistent", False):
-        envelope = judge_pool.ask(prompt, model, timeout)
+        envelope = judge_pool.ask(conversation_id, prompt, model, timeout)
         if envelope is None:
-            judge_pool.ensure_server(model, int(cfg.get("reuse_turns", 1)),
+            judge_pool.ensure_server(conversation_id, model, int(cfg.get("reuse_turns", 1)),
                                      int(cfg.get("idle_seconds", 900)))
     if envelope is None:
         envelope = _cold_envelope(binary, prompt, model, timeout)

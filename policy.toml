@@ -72,14 +72,14 @@ model = "gemini-3.8-flash-low"
 timeout_seconds = 30
 binary = "agy"
 
-# Juez de repuesto (judge_pool.py): un proceso auxiliar mantiene un agy ya arrancado para
-# que la consulta no pague el arranque (~6 s en frío, ~4 s con repuesto). Si el auxiliar
-# no responde, se juzga en frío como siempre.
+# Juez de repuesto (judge_pool.py): cada conversación tiene un auxiliar que mantiene un agy
+# ya arrancado, para que el juicio no pague el arranque (~7 s en frío, ~2,5 s con repuesto).
+# Si el auxiliar no responde, se juzga en frío como siempre.
 persistent = true
 # Consultas que atiende cada juez antes de descartarse. Con 1, cada juicio empieza de cero:
 # un juez reutilizado recuerda lo que el agente le hizo leer en consultas anteriores.
 reuse_turns = 1
-# El auxiliar se apaga solo tras este tiempo sin consultas.
+# El auxiliar se apaga tras este tiempo sin acciones; cada acción juzgada reinicia el plazo.
 idle_seconds = 900
 
 # Dónde deja agy el plan aprobado. Ese documento es la definición operativa de

@@ -274,15 +274,16 @@ def test_backend_agy() -> list[str]:
     with socketserver.TCPServer(("127.0.0.1", 0), Impostor) as srv, \
             tempfile.TemporaryDirectory() as tmp:
         threading.Thread(target=srv.handle_request, daemon=True).start()
-        original = judge_pool.STATE_FILE
-        judge_pool.STATE_FILE = pathlib.Path(tmp) / "judge.json"
-        judge_pool.STATE_FILE.write_text(json.dumps(
+        original = judge_pool.STATE_ROOT
+        judge_pool.STATE_ROOT = pathlib.Path(tmp)
+        judge_pool.state_dir("conv").mkdir(parents=True)
+        (judge_pool.state_dir("conv") / "judge.json").write_text(json.dumps(
             {"port": srv.server_address[1], "token": "robado"}), encoding="utf-8")
         try:
-            if judge_pool.ask("¿permitir?", "modelo", 5) is not None:
+            if judge_pool.ask("conv", "¿permitir?", "modelo", 5) is not None:
                 failures.append("juez de repuesto: aceptó un veredicto sin firma válida")
         finally:
-            judge_pool.STATE_FILE = original
+            judge_pool.STATE_ROOT = original
 
     # 5. Una llamada ilegible se deniega: un `ask` lo ejecutaría agy sin preguntar.
     r = subprocess.run([sys.executable, str(HOOK)], input="{no es json", capture_output=True,
