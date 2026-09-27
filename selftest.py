@@ -75,6 +75,25 @@ CASES_AUTO = [
     case("leer clave ssh", {"AbsolutePath": "~/.ssh/id_rsa"}, "deny", "view_file"),
     case("editar el hook", {"TargetFile": f"{ROOT}/.agents/hooks.json"}, "deny", "propose_code"),
     case("borrar el auto mode", {"CommandLine": "rm .agents/automode/pretooluse.py"}, "deny"),
+    # Las rutas se revisan pieza a pieza dentro del comando. Mirando el comando entero,
+    # `.env` precedido de un espacio y `.agents` precedido de `:` pasaban sin tocar regla.
+    case("leer .env con cat", {"CommandLine": "cat .env"}, "deny"),
+    case("leer .env con Get-Content", {"CommandLine": "Get-Content .env"}, "deny"),
+    case("política vía git show", {"CommandLine": "git show HEAD:.agents/plugins/automode/policy.toml"}, "deny"),
+
+    # ── Lecturas de PowerShell: vía rápida dentro del proyecto ──
+    case("Get-ChildItem", {"CommandLine": "Get-ChildItem -Force"}, "allow"),
+    case("Get-ChildItem recursivo", {"CommandLine": "Get-ChildItem -Recurse correos"}, "allow"),
+    case("Test-Path", {"CommandLine": "Test-Path salida"}, "allow"),
+    case("Get-Content", {"CommandLine": "Get-Content README.md -TotalCount 20"}, "allow"),
+    case("tubería de lectura", {"CommandLine": "Get-ChildItem salida | Select-Object Name, Length"}, "allow"),
+    # Un comando "seguro" deja de serlo cuando apunta fuera del proyecto o cuando lleva
+    # código incrustado: esos casos van al juez (aquí, sin juez, se deniegan).
+    case("lectura segura fuera del proyecto", {"CommandLine": "Get-ChildItem C:/Users"}, "deny"),
+    case("cat fuera del proyecto", {"CommandLine": "cat C:/Windows/win.ini"}, "deny"),
+    case("bloque de script en Select-Object", {"CommandLine": "Get-ChildItem | Select-Object @{n='x';e={Remove-Item a.txt}}"}, "deny"),
+    case("subexpresión en echo", {"CommandLine": "echo $(python borrar.py)"}, "deny"),
+    case("redirección que sobrescribe", {"CommandLine": "echo x > main.py"}, "deny"),
 
     # ── Sin clasificador disponible, lo complejo se deniega (fallback seguro) ──
     #

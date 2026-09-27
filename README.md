@@ -16,6 +16,9 @@ llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
 - **Respaldo antes de modificar.** Antes del primer cambio de cada bloque de trabajo guarda
   una captura git del proyecto en `refs/automode/<conversación>`, sin tocar tu índice ni tu
   rama. Las credenciales (`.env`, claves SSH…) quedan fuera de la captura.
+- **Instrucciones para el agente.** `rules/AGENTS.md` se suma a las reglas de agy mientras el
+  plugin está activo: le pide preferir sus herramientas de lectura a la shell y agrupar las
+  comprobaciones en un script, para que menos acciones tengan que esperar al juez.
 - **Cortacircuitos.** Si el agente insiste en caminos prohibidos, mantiene la denegación y le
   pide que cambie de enfoque o se detenga a explicarte qué necesita.
 

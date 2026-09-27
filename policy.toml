@@ -230,6 +230,17 @@ extra_write_roots = [
 # Comandos inequívocamente seguros. Coinciden desde el inicio del segmento.
 safe = [
   '(?:ls|dir|pwd|cd|echo|cat|type|head|tail|wc|which|where|whoami|date)\b',
+  # Lecturas de PowerShell, con sus alias. Eran la consulta al juez más frecuente del
+  # registro (Get-ChildItem, Test-Path): solo leen, y dentro del proyecto no hay nada
+  # que juzgar. Fuera del proyecto, o con código incrustado, siguen yendo al juez.
+  '(?:Get-ChildItem|gci|Get-Content|gc|Test-Path|Get-Location|gl|Resolve-Path|rvpa|Get-Item|gi|Split-Path|Join-Path)\b',
+  # Cmdlets que solo dan forma a una salida dentro de una tubería (Get-ChildItem | ...).
+  # Where-Object y ForEach-Object no están: su bloque de script ejecuta código.
+  '(?:Select-Object|select|Sort-Object|sort|Measure-Object|measure|Format-Table|ft|Format-List|fl|Out-String)\b',
+  # Búsqueda de texto. La búsqueda de credenciales la corta antes una regla bloqueada, y
+  # `rg --pre` queda fuera porque ejecuta un programa por cada archivo.
+  '(?:grep|findstr|Select-String|sls)\b',
+  'rg\b(?![^|;&]*--pre)',
   '(?:git)\s+(?:status|log|diff|show|branch|remote|fetch|stash\s+list|rev-parse|describe|blame)\b',
   # `git init` es la salida que el motor le indica al agente cuando no hay repositorio y
   # por tanto no hay respaldo posible. Sin esto, ese consejo sería un callejón sin salida:

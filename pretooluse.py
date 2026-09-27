@@ -191,6 +191,23 @@ def split_segments(command: str) -> list:
     return [s.strip() for s in segments if s.strip()]
 
 
+def command_tokens(command: str) -> list:
+    """Piezas de un comando que pueden ser rutas.
+
+    Las reglas de rutas están escritas para una ruta aislada, no para un comando entero:
+    en `cat .env` el `.env` va precedido de un espacio y en
+    `git show HEAD:.agents/policy.toml` el `.agents` va precedido de `:`. Sin partir el
+    comando, las dos lecturas pasaban como comandos seguros.
+    """
+    return [t for t in re.split(r"""[\s"'`=:(),;|&<>{}\[\]]+""", command) if t]
+
+
+# Construcciones que ejecutan código dentro de un comando de apariencia inofensiva:
+# subexpresiones `$(...)`, bloques de script `{...}` (Select-Object @{e={...}}), el
+# acento grave de sustitución y la redirección `>`, que sobrescribe archivos.
+EMBEDDED_CODE = re.compile(r"\$\(|[{}`>]")
+
+
 def match_any(text: str, patterns) -> str | None:
     for p in patterns:
         try:
@@ -452,17 +469,18 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
     if not segments:
         return "deny", "Comando vacío o no interpretable: no hay nada que autorizar.", None
 
-    # 2. Comprobar si todos los segmentos son comandos inequívocamente seguros
-    all_safe = True
-    for seg in segments:
-        if not match_any(seg, [r"^\s*" + p for p in safe]):
-            all_safe = False
-            break
-
-    if all_safe:
-        return "allow", "Todos los segmentos son comandos de solo consulta o verificación.", None
-
+    # 2. Comprobar si todos los segmentos son comandos inequívocamente seguros. Un comando
+    #    de la lista deja de serlo si lleva código incrustado o si apunta fuera del
+    #    proyecto: leer fuera no destruye nada, pero se juzga igual que con view_file.
+    all_safe = all(
+        match_any(seg, [r"^\s*" + p for p in safe]) and not EMBEDDED_CODE.search(seg)
+        for seg in segments
+    )
     roots = (payload.get("workspacePaths") if payload else []) or []
+    fuera = command_targets_outside(command, roots)
+
+    if all_safe and not fuera:
+        return "allow", "Todos los segmentos son comandos de solo consulta o verificación.", None
 
     # 3. Todo lo demás lo juzga el clasificador, en ambos modos. La fase viaja como
     #    contexto: no es lo mismo compilar mientras se planifica que tras la aprobación,
@@ -472,7 +490,6 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
 
     tool_name = payload.get("toolCall", {}).get("name", "run_command") if payload else "run_command"
     tool_args = payload.get("toolCall", {}).get("args", {}) if payload else {"CommandLine": command}
-    fuera = command_targets_outside(command, roots)
     motivo_consulta = (
         f"Comando fuera del alcance de las reglas estáticas. Toca la ruta {fuera[:80]}, fuera del proyecto."
         if fuera else
@@ -505,10 +522,14 @@ def decide(payload: dict, policy: dict) -> tuple:
     strings = collect_strings(args, [], set(tools.get("content_args", [])))
     read_only = name in tools.get("read_only", [])
 
+    # En un comando, las rutas van mezcladas con el resto: se revisan también pieza a pieza.
+    key = tools.get("command_arg", {}).get(name)
+    tokens = command_tokens(args[key]) if key and isinstance(args.get(key), str) else []
+
     # 1. Auto-protección. Se deniega siempre, sin excepción configurable: un guardián
     #    que puede editarse a sí mismo no es un guardián.
     if not read_only:
-        for text in strings:
+        for text in strings + tokens:
             hit = match_any(text, paths.get("self_protected", []))
             if hit:
                 return (
@@ -526,9 +547,13 @@ def decide(payload: dict, policy: dict) -> tuple:
         hit = match_any(text, paths.get("sensitive", []))
         if hit:
             return "deny", f"Acceso a una ruta con credenciales: {text[:120]}", hit
+    # Una pieza suelta como `id_rsa` no parece una ruta, pero dentro de un comando lo es.
+    for text in tokens:
+        hit = match_any(text, paths.get("sensitive", []))
+        if hit:
+            return "deny", f"Acceso a una ruta con credenciales: {text[:120]}", hit
 
     # 3. Herramientas que ejecutan comandos: se juzga la carga real.
-    key = tools.get("command_arg", {}).get(name)
     if key and isinstance(args.get(key), str):
         return evaluate_command(args[key], policy, payload)
 
