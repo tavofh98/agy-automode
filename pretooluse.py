@@ -41,13 +41,16 @@ except ImportError:
             return None
 
 try:
-    from checkpoint import ensure_checkpoint, restore_hint
+    from checkpoint import ensure_checkpoint, omitted_paths, restore_hint
 except ImportError:
     try:
-        from automode.checkpoint import ensure_checkpoint, restore_hint
+        from automode.checkpoint import ensure_checkpoint, omitted_paths, restore_hint
     except ImportError:
         def ensure_checkpoint(*args, **kwargs):
             return False, "módulo de capturas no disponible"
+
+        def omitted_paths(*args, **kwargs):
+            return []
 
         def restore_hint(*args, **kwargs):
             return ""
@@ -406,9 +409,12 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
         STATE_DIR,
         min_interval_seconds=float(cfg.get("min_interval_seconds", 300)),
         exclude_patterns=policy.get("paths", {}).get("sensitive", []),
+        max_file_bytes=int(float(cfg.get("max_file_mb", 0)) * 1024 * 1024),
+        keep_last=int(cfg.get("keep_last", 0)),
     )
     if ok:
-        return True, True, f"{detalle}; deshacer con `{restore_hint(conversation_id)}`"
+        hint = restore_hint(conversation_id, omitted_paths(STATE_DIR, conversation_id))
+        return True, True, f"{detalle}; deshacer con `{hint}`"
     if cfg.get("require", True):
         return False, False, detalle
     return True, False, detalle

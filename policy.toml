@@ -98,6 +98,15 @@ require = true
 # bloque de trabajo, no versionar cada paso.
 min_interval_seconds = 300
 
+# Archivos más grandes que esto quedan fuera de la captura: leerlos y comprimirlos es lo
+# que la vuelve lenta en proyectos con datos. El motivo de la aprobación los nombra, y la
+# orden de restauración los excluye para no pisarlos. 0 captura todo.
+max_file_mb = 10
+
+# Capturas que se conservan: las de las últimas N conversaciones. Sin límite, cada
+# conversación deja una para siempre y `.git` solo crece. 0 las conserva todas.
+keep_last = 20
+
 
 [circuit_breaker]
 # Si el agente insiste en caminos prohibidos, algo va mal: la denegación se mantiene y se

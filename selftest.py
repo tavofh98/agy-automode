@@ -304,7 +304,7 @@ def test_alcance_y_respaldo() -> list[str]:
     if is_repository(pathlib.Path(ROOT)):
         import tomllib
         sensibles = tomllib.load((HERE / "policy.toml").open("rb"))["paths"]["sensitive"]
-        ok, sha = create_checkpoint(pathlib.Path(ROOT), "selftest_checkpoint", sensibles)
+        ok, sha, _ = create_checkpoint(pathlib.Path(ROOT), "selftest_checkpoint", sensibles)
         if not ok:
             failures.append(f"create_checkpoint: falló ({sha})")
         else:
@@ -346,6 +346,48 @@ def test_alcance_y_respaldo() -> list[str]:
             failures.append("registro heredado: se aceptó una captura de otro proyecto como respaldo")
         elif not ref_exists(proyecto, "refs/automode/conversacion_heredada"):
             failures.append("registro heredado: se afirmó respaldo sin crear la referencia")
+
+    # 5c. Los archivos pesados quedan fuera de la captura, y restaurar no los pisa ni los
+    #     borra: una captura sin su entrada haría que `git restore -- .` los eliminase.
+    with tempfile.TemporaryDirectory() as tmp:
+        proyecto = pathlib.Path(tmp)
+        git = lambda *a: subprocess.run(["git", *a], cwd=tmp, capture_output=True, text=True)
+        git("init", "-q")
+        (proyecto / "pesado_seguido.bin").write_bytes(b"v1" * 2000)
+        (proyecto / "chico.txt").write_text("original\n", encoding="utf-8")
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        (proyecto / "pesado_suelto.bin").write_bytes(b"x" * 5000)
+        (proyecto / "pesado_seguido.bin").write_bytes(b"v2" * 2000)
+        ok, sha, omitidos = create_checkpoint(proyecto, "pesados", max_file_bytes=1000)
+        arbol = git("ls-tree", "-r", "--name-only", sha).stdout.split() if ok else []
+        if not ok or sorted(omitidos) != ["pesado_seguido.bin", "pesado_suelto.bin"]:
+            failures.append(f"capturas: omitidos inesperados ({omitidos})")
+        elif "pesado_suelto.bin" in arbol or "chico.txt" not in arbol:
+            failures.append(f"capturas: el filtro de tamaño no se aplicó ({arbol})")
+        else:
+            (proyecto / "chico.txt").write_text("cambiado\n", encoding="utf-8")
+            orden = ["git", "restore", f"--source={sha}", "--", "."]
+            git(*orden[1:], *[f":(exclude){r}" for r in omitidos])
+            if (proyecto / "chico.txt").read_text(encoding="utf-8") != "original\n":
+                failures.append("capturas: la restauración no recuperó el archivo pequeño")
+            if (proyecto / "pesado_seguido.bin").read_bytes()[:2] != b"v2":
+                failures.append("capturas: la restauración pisó un archivo pesado omitido")
+            if not (proyecto / "pesado_suelto.bin").exists():
+                failures.append("capturas: la restauración borró un archivo pesado omitido")
+
+    # 5d. Solo se conservan las capturas de las últimas conversaciones.
+    with tempfile.TemporaryDirectory() as tmp:
+        proyecto = pathlib.Path(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=tmp, capture_output=True)
+        (proyecto / "a.txt").write_text("a\n", encoding="utf-8")
+        for conv in ("conv_1", "conv_2", "conv_3"):
+            ensure_checkpoint(proyecto, conv, proyecto / ".estado" / conv, keep_last=2)
+        restantes = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname)", "refs/automode"],
+            cwd=tmp, capture_output=True, text=True).stdout.split()
+        if len(restantes) != 2 or "refs/automode/conv_3" not in restantes:
+            failures.append(f"capturas: la limpieza de referencias viejas falló ({restantes})")
 
     # 6. Sin respaldo posible, la edición no se aprueba.
     with tempfile.TemporaryDirectory() as sin_git:

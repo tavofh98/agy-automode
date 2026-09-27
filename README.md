@@ -15,7 +15,9 @@ llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
   ejecución.
 - **Respaldo antes de modificar.** Antes del primer cambio de cada bloque de trabajo guarda
   una captura git del proyecto en `refs/automode/<conversación>`, sin tocar tu índice ni tu
-  rama. Las credenciales (`.env`, claves SSH…) quedan fuera de la captura.
+  rama. Las credenciales (`.env`, claves SSH…) quedan fuera de la captura, igual que los
+  archivos de más de 10 MB: el motivo de la aprobación los nombra y la orden para deshacer
+  los excluye. Se conservan las capturas de las últimas 20 conversaciones.
 - **Instrucciones para el agente.** `rules/AGENTS.md` se suma a las reglas de agy mientras el
   plugin está activo: le pide preferir sus herramientas de lectura a la shell y agrupar las
   comprobaciones en un script, para que menos acciones tengan que esperar al juez.
