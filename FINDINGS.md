@@ -27,3 +27,11 @@ Lo que no es código pero explica por qué el código es así.
 
 - Se extraen solo los mensajes auténticos del usuario del transcript (`USER_EXPLICIT`, `USER_INPUT`); se descarta el razonamiento, las salidas de herramientas y las respuestas del modelo.
 - Cuando hay un plan aprobado en `brain/<conversationId>/`, ese plan es la vara del trabajo, no los últimos mensajes sueltos.
+
+## Juez de repuesto
+
+- Cada acción la juzga un agy nuevo, ya arrancado, que se descarta al responder: ningún juicio ve los anteriores. Latencia ~2,5–3,9 s frente a ~7 s en frío.
+- El formato de entrada de `agy --input-format stream-json` no está documentado: `{"event": "user", "message": {"content": "..."}}`, con `--print=` vacío y `--output-format stream-json`. `/clear` no existe en modo print, así que no hay forma de vaciar la memoria de un agy vivo.
+- Un auxiliar por conversación, nunca compartido: la misma acción puede ser válida en una conversación y no en otra (`python simulador.py` se aprueba en la del simulador y se deniega en la de los correos).
+- Canal: solo `127.0.0.1`, secreto por conversación en `~/.gemini/automode/<conversación>/` y respuestas firmadas con HMAC. Si el auxiliar falla, la acción se juzga en frío.
+- Carpeta de trabajo propia: si hereda la del hook, Windows no deja borrar ni renombrar el proyecto mientras el auxiliar vive.

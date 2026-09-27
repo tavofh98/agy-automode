@@ -1,27 +1,3 @@
-"""Juez de repuesto: evita que cada acción juzgada pague el arranque de `agy`.
-
-Arrancar `agy` cuesta ~4 s de los ~7 que tarda un juicio en frío. Cada conversación tiene su
-propio proceso auxiliar, que mantiene un `agy` en modo stream-json ya arrancado: cada acción
-la juzga un juez nuevo, que se descarta después, mientras en segundo plano se prepara el
-siguiente.
-
-Un auxiliar por conversación: cada una tiene su tarea, su configuración y sus jueces, y
-ningún juez atiende acciones de dos conversaciones.
-
-Un juez por acción: un `agy` que juzga varias acciones recuerda las anteriores, incluidos
-los argumentos que redacta el agente. `reuse_turns` lo permite dentro de la conversación;
-por defecto cada juicio empieza de cero.
-
-Seguridad del canal:
-- Escucha solo en 127.0.0.1.
-- Un secreto aleatorio por conversación, en `~/.gemini/automode/<conversación>/`, autentica a
-  las dos partes: el servidor rechaza peticiones sin él y el hook rechaza respuestas no
-  firmadas. Un servidor falso que respondiera "allow" a todo no sabría firmar.
-- Si el auxiliar falla, `classifier_agy.py` juzga en frío: el auxiliar solo acelera.
-
-Uso interno: `python judge_pool.py serve <conversación> <modelo> <reuse_turns> <idle_seconds>`.
-Se apaga tras `idle_seconds` sin acciones; cada acción juzgada reinicia el plazo.
-"""
 import hashlib
 import hmac
 import json
