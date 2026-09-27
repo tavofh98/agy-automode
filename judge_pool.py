@@ -91,7 +91,9 @@ def ensure_server(model: str, reuse_turns: int, idle_seconds: int) -> None:
         LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
         cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "serve",
                model, str(reuse_turns), str(idle_seconds)]
-        opciones = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+        # Carpeta propia: heredar la del hook dejaría el proyecto bloqueado (en Windows no
+        # se puede borrar ni renombrar una carpeta que un proceso vivo usa como cwd).
+        opciones = {"cwd": str(STATE_DIR), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}
         if os.name == "nt":
             base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
