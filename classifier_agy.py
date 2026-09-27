@@ -36,6 +36,11 @@ import subprocess
 import tempfile
 from datetime import datetime
 
+try:
+    import judge_pool
+except ImportError:
+    from automode import judge_pool
+
 # Marca que encabeza el motivo cuando la denegación no expresa un juicio de política sino
 # un guardián que no pudo pronunciarse: binario ausente, timeout, salida ilegible. El
 # motor la usa para no contar estos casos en el cortacircuitos —un fallo de agy no es el
@@ -242,32 +247,8 @@ def extract_decision(text: str) -> tuple[str, str] | None:
     return None
 
 
-def classify_with_agy(
-    user_intent: str,
-    tool_name: str,
-    tool_args: dict,
-    policy: dict,
-    state_dir: pathlib.Path,
-    root_dir: pathlib.Path | None = None,
-    context: dict | None = None,
-) -> tuple[str, str]:
-    """Evalúa la tool call lanzando `agy --print`.
-
-    Devuelve (decision, reason). Ante cualquier fallo —binario ausente, timeout,
-    código de salida distinto de cero, salida ilegible— devuelve ('deny', ...): este
-    camino nunca falla hacia `allow`, y tampoco hacia `ask`, que en sesión desatendida
-    se ejecutaría sin que nadie lo revise.
-    """
-    cfg = policy.get("classifier", {}).get("agy", {})
-    binary = cfg.get("binary", "agy")
-    model = cfg.get("model", "gemini-3.8-flash-low")
-    timeout = float(cfg.get("timeout_seconds", 30))
-
-    cache = DecisionCache(state_dir / "decision_cache.json")
-    cached = cache.get(user_intent, tool_name, tool_args, context)
-    if cached:
-        return cached
-
+def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
+    """Juzga lanzando un `agy --print` nuevo. Devuelve la envoltura o ("deny", motivo)."""
     # Un `agy` anidado no debe heredar el workspace ni encontrar los hooks: se le da
     # un directorio propio, vacío y efímero.
     env = dict(os.environ)
@@ -275,7 +256,7 @@ def classify_with_agy(
 
     cmd = [
         resolve_binary(binary),
-        "--print", build_prompt(user_intent, tool_name, tool_args, context),
+        "--print", prompt,
         "--output-format", "json",
         "--model", model,
         "--print-timeout", f"{int(timeout)}s",
@@ -323,6 +304,49 @@ def classify_with_agy(
 
     if not isinstance(envelope, dict):
         return "deny", f"{TECHNICAL_MARK} Salida de agy no interpretable: sin veredicto, no se ejecuta."
+
+    return envelope
+
+
+def classify_with_agy(
+    user_intent: str,
+    tool_name: str,
+    tool_args: dict,
+    policy: dict,
+    state_dir: pathlib.Path,
+    root_dir: pathlib.Path | None = None,
+    context: dict | None = None,
+) -> tuple[str, str]:
+    """Evalúa la tool call lanzando `agy --print`.
+
+    Devuelve (decision, reason). Ante cualquier fallo —binario ausente, timeout,
+    código de salida distinto de cero, salida ilegible— devuelve ('deny', ...): este
+    camino nunca falla hacia `allow`, y tampoco hacia `ask`, que en sesión desatendida
+    se ejecutaría sin que nadie lo revise.
+    """
+    cfg = policy.get("classifier", {}).get("agy", {})
+    binary = cfg.get("binary", "agy")
+    model = cfg.get("model", "gemini-3.8-flash-low")
+    timeout = float(cfg.get("timeout_seconds", 30))
+
+    cache = DecisionCache(state_dir / "decision_cache.json")
+    cached = cache.get(user_intent, tool_name, tool_args, context)
+    if cached:
+        return cached
+
+    prompt = build_prompt(user_intent, tool_name, tool_args, context)
+    envelope = None
+    # El juez de repuesto ahorra el arranque de agy. Si no hay uno listo se arranca para
+    # la próxima consulta y esta se juzga en frío: el auxiliar solo acelera, no decide.
+    if cfg.get("persistent", False):
+        envelope = judge_pool.ask(prompt, model, timeout)
+        if envelope is None:
+            judge_pool.ensure_server(model, int(cfg.get("reuse_turns", 1)),
+                                     int(cfg.get("idle_seconds", 900)))
+    if envelope is None:
+        envelope = _cold_envelope(binary, prompt, model, timeout)
+        if isinstance(envelope, tuple):
+            return envelope
 
     status = str(envelope.get("status", "")).upper()
     if status and status != "SUCCESS":

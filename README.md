@@ -10,6 +10,11 @@ llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
 - **agy como juez de los casos dudosos.** Lo que las reglas no resuelven se consulta a
   `agy --print` con tu plan y tus últimos mensajes delante. Sin claves ni configuración
   aparte: usa la sesión de agy ya autenticada.
+- **Juez de repuesto.** Un proceso auxiliar (`judge_pool.py`) mantiene un agy ya arrancado,
+  así que cada consulta tarda ~2,5 s en vez de ~7. Cada juicio lo hace un agy nuevo, sin
+  memoria de consultas anteriores. Escucha solo en `127.0.0.1`, sus respuestas van
+  firmadas con un secreto en `~/.gemini/automode/` y se apaga tras 15 minutos sin uso. Si
+  no responde, la consulta se hace en frío como siempre.
 - **Fase de planeación.** Tras escribir `/plan`, las ediciones de código pasan por el juez,
   que las deniega hasta que apruebes. Una frase de aprobación (ver más abajo) abre la fase de
   ejecución.

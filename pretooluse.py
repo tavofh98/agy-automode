@@ -20,6 +20,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import time
 from datetime import datetime
 
 try:
@@ -736,6 +737,7 @@ def respond(decision: str, reason: str, overrides: list | None = None) -> None:
 
 def main() -> int:
     global STATE_DIR
+    inicio = time.monotonic()
 
     # Guardia anti-recursión. Si esta variable está definida, quien nos invoca es el
     # `agy` que el propio auto mode lanzó para clasificar. Ese agente razona sobre
@@ -828,6 +830,8 @@ def main() -> int:
             "effective": effective,
             "reason": reason,
             "rule": rule,
+            # Cuánto tardó la decisión: las reglas resuelven en milisegundos, el juez en segundos.
+            "ms": int((time.monotonic() - inicio) * 1000),
         })
 
     respond(effective, reason, permission_overrides(payload, policy, effective))
