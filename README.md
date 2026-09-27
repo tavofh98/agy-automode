@@ -126,7 +126,7 @@ Todo el comportamiento vive en `policy.toml`: comandos seguros y bloqueados, rut
 sensibles, herramientas por nivel, el modelo y el tiempo límite del juez, el respaldo y el
 cortacircuitos. Los comentarios del archivo explican cada sección.
 
-`python mode.py` muestra el modo fijo de la política; `python mode.py plan|auto` lo cambia.
+`python src/mode.py` muestra el modo fijo de la política; `python src/mode.py plan|auto` lo cambia.
 
 ## Dónde guarda su estado
 
@@ -138,7 +138,7 @@ cortacircuitos y la caché de veredictos. El agente no puede modificar esa carpe
 ## Pruebas
 
 ```bash
-python selftest.py
+python tests/selftest.py
 ```
 
 Trabaja sobre un repositorio temporal y no llama a agy.

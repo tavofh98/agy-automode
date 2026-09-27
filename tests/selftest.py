@@ -10,8 +10,10 @@ import tempfile
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-HERE = pathlib.Path(__file__).resolve().parent
-HOOK = HERE / "pretooluse.py"
+PLUGIN_ROOT = pathlib.Path(__file__).resolve().parent.parent
+SRC = PLUGIN_ROOT / "src"
+sys.path.insert(0, str(SRC))
+HOOK = SRC / "pretooluse.py"
 # Proyecto desechable: las capturas nunca se escriben en un repositorio real.
 ROOT = tempfile.mkdtemp(prefix="automode_selftest_repo_")
 
@@ -139,7 +141,7 @@ def invoke(tool, args, conversation_id, mode="auto", extra_env=None):
         [sys.executable, str(HOOK)],
         input=json.dumps(payload),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        cwd=str(HERE.parent), env=env,
+        cwd=str(PLUGIN_ROOT.parent), env=env,
     )
     if proc.stdout is None:
         return f"<salida None: {proc.stderr[:150]}>", ""
@@ -313,7 +315,7 @@ def test_scope_and_backup() -> list[str]:
     # 5. La captura recoge el árbol completo, incluidos archivos sin seguimiento.
     if is_repository(pathlib.Path(ROOT)):
         import tomllib
-        sensitive = tomllib.load((HERE / "policy.toml").open("rb"))["paths"]["sensitive"]
+        sensitive = tomllib.load((PLUGIN_ROOT / "policy.toml").open("rb"))["paths"]["sensitive"]
         ok, sha, _ = create_checkpoint(pathlib.Path(ROOT), "selftest_checkpoint", sensitive)
         if not ok:
             failures.append(f"create_checkpoint: falló ({sha})")
@@ -422,7 +424,7 @@ def test_scope_and_backup() -> list[str]:
         proc = subprocess.run(
             [sys.executable, str(HOOK)], input=json.dumps(payload),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=str(HERE), env=env,
+            cwd=str(PLUGIN_ROOT), env=env,
         )
         try:
             output = json.loads((proc.stdout or "").strip().splitlines()[-1])
@@ -443,7 +445,7 @@ def test_phase_detection() -> list[str]:
     failures = []
     import tomllib
     from transcript import detect_phase
-    mode_cfg = tomllib.load((HERE / "policy.toml").open("rb"))["mode"]
+    mode_cfg = tomllib.load((PLUGIN_ROOT / "policy.toml").open("rb"))["mode"]
 
     def write_transcript(messages, name):
         path = pathlib.Path(STATE_DIR) / f"fase_{name}.jsonl"
@@ -484,7 +486,7 @@ def test_phase_detection() -> list[str]:
         proc = subprocess.run(
             [sys.executable, str(HOOK)], input=json.dumps(payload),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=str(HERE.parent), env=env,
+            cwd=str(PLUGIN_ROOT.parent), env=env,
         )
         try:
             got = json.loads(proc.stdout)["decision"]

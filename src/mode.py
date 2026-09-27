@@ -3,8 +3,7 @@ import pathlib
 import re
 import sys
 
-HERE = pathlib.Path(__file__).resolve().parent
-POLICY_FILE = HERE / "policy.toml"
+POLICY_FILE = pathlib.Path(__file__).resolve().parent.parent / "policy.toml"
 
 
 def get_current_mode() -> str:

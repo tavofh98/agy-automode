@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python pretooluse.py",
+            "command": "python src/pretooluse.py",
             "timeout": 60
           }
         ]

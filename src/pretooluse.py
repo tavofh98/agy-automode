@@ -63,8 +63,9 @@ except ImportError:
             return "deny", f"{TECHNICAL_MARK} Clasificador agy no disponible."
 
 
-HERE = pathlib.Path(__file__).resolve().parent
-POLICY_FILE = HERE / "policy.toml"
+# El código vive en src/; la política y hooks.json, en la raíz del plugin.
+PLUGIN_ROOT = pathlib.Path(__file__).resolve().parent.parent
+POLICY_FILE = PLUGIN_ROOT / "policy.toml"
 # Estado de la conversación en curso. `main()` lo fija con `resolve_state_dir` antes de
 # decidir; este valor solo rige si la llamada no pudo leerse.
 STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "automode_no_conversation"
@@ -297,7 +298,7 @@ def command_targets_outside(command: str, roots: list) -> str | None:
 
 def primary_root(roots: list) -> pathlib.Path:
     """Raíz del proyecto según el payload, con el repositorio como último recurso."""
-    return pathlib.Path(roots[0]) if roots else HERE.parent.parent
+    return pathlib.Path(roots[0]) if roots else PLUGIN_ROOT.parent.parent
 
 
 def work_objective(payload: dict | None, policy: dict) -> str:
@@ -696,7 +697,7 @@ def main() -> int:
             "ts": datetime.now().isoformat(timespec="seconds"),
             # Qué instalación actuó: con el plugin en un proyecto y en global a la vez,
             # es lo único que distingue sus registros.
-            "hook": str(HERE),
+            "hook": str(PLUGIN_ROOT),
             "conversation": conversation_id,
             "step": payload.get("stepIdx"),
             "tool": call.get("name"),

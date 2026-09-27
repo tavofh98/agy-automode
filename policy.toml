@@ -36,7 +36,7 @@ audit_allow = true
 
 [classifier]
 # Juez para lo que las reglas no resuelven, en ambos modos. Veredicto binario: allow o deny
-# (ver FINDINGS.md sobre por qué no existe `ask`).
+# (ver docs/findings.md sobre por qué no existe `ask`).
 enabled = true
 
 # Si el juez no puede pronunciarse (timeout, salida ilegible): deniega, sin contar para el cortacircuitos.
