@@ -1,10 +1,3 @@
-"""Utilidad CLI para consultar y alternar entre los modos 'plan' y 'auto'.
-
-Uso:
-    python mode.py          # Muestra el estado actual
-    python mode.py plan     # Conmuta a Modo Plan
-    python mode.py auto     # Conmuta a Modo Auto
-"""
 import os
 import pathlib
 import re

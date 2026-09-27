@@ -1,14 +1,3 @@
-"""Batería de pruebas completa para el Auto Mode (Modo Plan, Modo Auto y clasificador agy).
-
-Ejecutar: python selftest.py
-
-Verifica:
-1. Modo Plan: lectura libre, git de consulta, python exploratorio permitido, edición de código solicita confirmación (ask), líneas rojas bloqueadas (deny).
-2. Modo Auto: edición en proyecto permitida (allow), comandos seguros permitidos, líneas rojas bloqueadas (deny), comandos no triviales con fallback seguro a deny si no hay clasificador.
-3. Componentes del Clasificador: caché de decisiones.
-4. Extractor de transcript: filtro 'reasoning-blind' de mensajes del usuario.
-5. Cortacircuitos y recuperación tras escalada.
-"""
 import json
 import os
 import pathlib

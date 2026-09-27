@@ -1,19 +1,3 @@
-"""Hook PreToolUse del auto mode de agy: decide sobre cada llamada a herramienta.
-
-Solo reglas estáticas declaradas en `policy.toml`. Sin red y sin dependencias
-externas: una dependencia rota sería un auto mode caído.
-
-Contrato (documentado dentro del binario de agy):
-    stdin  <- {"toolCall": {"name": ..., "args": {...}}, "stepIdx": N,
-               "conversationId": ..., "workspacePaths": [...], "transcriptPath": ...}
-    stdout -> {"decision": "allow"|"ask"|"deny"|"force_ask", "reason": "..."}
-
-Principio rector: este script **nunca falla hacia `allow`**. Cualquier excepción,
-entrada malformada o política ilegible degrada a `deny`: con --dangerously-skip-permissions
-agy ejecuta un `ask` sin preguntar, así que devolver la decisión a la persona equivaldría
-a aprobar sin revisión. `stdout` transporta únicamente el JSON de decisión; todo diagnóstico va al
-registro de auditoría.
-"""
 import json
 import os
 import pathlib

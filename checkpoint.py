@@ -1,25 +1,3 @@
-"""Capturas del estado del proyecto antes de que el agente lo modifique.
-
-El motivo «reversible por control de versiones» que el auto mode emite al aprobar una
-edición es una promesa que nadie verificaba: en un proyecto sin git, o con trabajo sin
-commitear, no hay nada a lo que volver. Este módulo la convierte en un hecho.
-
-Antes del primer cambio destructivo de cada bloque de trabajo se guarda un commit con
-el árbol completo —incluidos los archivos sin seguimiento— y se apunta con una
-referencia bajo `refs/automode/`. Recuperar es entonces una orden de git corriente.
-
-La captura **no toca nada del trabajo en curso**: usa un índice temporal propio
-(`GIT_INDEX_FILE`), de modo que el índice de la persona, su directorio de trabajo, su
-lista de `stash` y su rama actual quedan exactamente como estaban. Tampoco se cuelga
-del historial: el commit no tiene padre y solo lo alcanza su referencia.
-
-Respeta `.gitignore`, así que lo excluido del repositorio también queda fuera de la
-captura. Un proyecto que ignora sus datos no los verá respaldados aquí.
-
-Además excluye siempre las rutas sensibles de la política (`[paths].sensitive`), diga lo
-que diga el `.gitignore` del proyecto: se observó un `.env` con credenciales copiado en
-todas las capturas de un repositorio cuyo `.gitignore` no lo mencionaba.
-"""
 import json
 import os
 import pathlib
