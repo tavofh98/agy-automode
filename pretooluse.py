@@ -210,6 +210,15 @@ def command_tokens(command: str) -> list:
 # acento grave de sustitución y la redirección `>`, que sobrescribe archivos.
 EMBEDDED_CODE = re.compile(r"\$\(|[{}`>]")
 
+# Redirecciones que solo descartan o unen la salida de errores: no escriben en el proyecto.
+HARMLESS_REDIRECT = re.compile(r"\s*(?:[12*]?>\s*(?:\$null|/dev/null|nul)\b|[12]>&[12])", re.I)
+
+# Con una variable o una unidad de PowerShell la ruta real no se conoce sin ejecutar el
+# comando: `$env:USERPROFILE\...` escapa del rastreo de rutas y `env:` guarda las claves
+# de API de la sesión.
+UNRESOLVED_PATH = re.compile(
+    r"\$[\w{:]|%\w+%|(?<![\w-])(?:env|variable|function|alias|hklm|hkcu|cert|wsman):", re.I)
+
 
 def match_any(text: str, patterns) -> str | None:
     for p in patterns:
@@ -478,10 +487,12 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
     # 2. Comprobar si todos los segmentos son comandos inequívocamente seguros. Un comando
     #    de la lista deja de serlo si lleva código incrustado o si apunta fuera del
     #    proyecto: leer fuera no destruye nada, pero se juzga igual que con view_file.
-    all_safe = all(
-        match_any(seg, [r"^\s*" + p for p in safe]) and not EMBEDDED_CODE.search(seg)
-        for seg in segments
-    )
+    def is_safe(seg: str) -> bool:
+        limpio = HARMLESS_REDIRECT.sub("", seg)
+        return bool(match_any(limpio, [r"^\s*" + p for p in safe])
+                    and not EMBEDDED_CODE.search(limpio) and not UNRESOLVED_PATH.search(limpio))
+
+    all_safe = all(is_safe(seg) for seg in segments)
     roots = (payload.get("workspacePaths") if payload else []) or []
     fuera = command_targets_outside(command, roots)
 

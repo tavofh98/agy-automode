@@ -94,6 +94,15 @@ CASES_AUTO = [
     case("bloque de script en Select-Object", {"CommandLine": "Get-ChildItem | Select-Object @{n='x';e={Remove-Item a.txt}}"}, "deny"),
     case("subexpresión en echo", {"CommandLine": "echo $(python borrar.py)"}, "deny"),
     case("redirección que sobrescribe", {"CommandLine": "echo x > main.py"}, "deny"),
+    # Descartar o unir la salida de errores no escribe nada del proyecto.
+    case("errores unidos a la salida", {"CommandLine": "pytest -q 2>&1"}, "allow"),
+    case("errores descartados", {"CommandLine": "Get-ChildItem salida 2>$null | Out-Null"}, "allow"),
+    # Con una variable o una unidad de PowerShell no se sabe qué se lee: `env:` guarda
+    # las claves de API de la sesión.
+    case("variables de entorno", {"CommandLine": "Get-Content env:OPENAI_API_KEY"}, "deny"),
+    case("ruta con variable", {"CommandLine": "Get-Content $env:USERPROFILE\\Documents\\notas.txt"}, "deny"),
+    # La autoprotección cubre `.agents`, no cualquier carpeta llamada `agents` del proyecto.
+    case("carpeta agents del proyecto", {"TargetFile": f"{ROOT}/agents/main.py"}, "allow", "write_to_file"),
 
     # ── Sin clasificador disponible, lo complejo se deniega (fallback seguro) ──
     #

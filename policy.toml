@@ -203,7 +203,9 @@ sensitive = [
 # Auto-protección: el auto mode no puede modificarse a sí mismo. Un guardián editable no
 # es un guardián, así que esta regla no admite excepciones ni configuración.
 self_protected = [
-  '(?:^|[\s/\\])\.?agents(?:[/\\]|$)',
+  # El punto es obligatorio: sin él, cualquier carpeta `agents/` del proyecto quedaba
+  # bloqueada, algo común en proyectos de agentes.
+  '(?:^|[\s/\\])\.agents(?:[/\\]|$)',
   # Instalación global del auto mode (y del resto de la configuración global de agy).
   '(?:^|[\s/\\])\.gemini[/\\]config(?:[/\\]|$)',
 ]
@@ -245,7 +247,7 @@ safe = [
   '(?:Get-ChildItem|gci|Get-Content|gc|Test-Path|Get-Location|gl|Resolve-Path|rvpa|Get-Item|gi|Split-Path|Join-Path)\b',
   # Cmdlets que solo dan forma a una salida dentro de una tubería (Get-ChildItem | ...).
   # Where-Object y ForEach-Object no están: su bloque de script ejecuta código.
-  '(?:Select-Object|select|Sort-Object|sort|Measure-Object|measure|Format-Table|ft|Format-List|fl|Out-String)\b',
+  '(?:Select-Object|select|Sort-Object|sort|Measure-Object|measure|Format-Table|ft|Format-List|fl|Out-String|Out-Null)\b',
   # Búsqueda de texto. La búsqueda de credenciales la corta antes una regla bloqueada, y
   # `rg --pre` queda fuera porque ejecuta un programa por cada archivo.
   '(?:grep|findstr|Select-String|sls)\b',
