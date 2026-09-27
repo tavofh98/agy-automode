@@ -80,11 +80,7 @@ def _es_sensible(ruta: str, patrones) -> bool:
 
 
 def _pesados(root: pathlib.Path, max_file_bytes: int) -> tuple[bool, list, list]:
-    """Separa los archivos del proyecto por tamaño sin leerlos: solo se consulta su tamaño.
-
-    Devuelve (ok, a_capturar, omitidos). Un archivo con seguimiento que ya no existe va a
-    `a_capturar`: así la captura registra que se borró.
-    """
+    """Separa los archivos por tamaño sin leerlos. Devuelve (ok, a_capturar, omitidos)."""
     ok, listado = _git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"], root)
     if not ok:
         return False, [], []
@@ -92,7 +88,7 @@ def _pesados(root: pathlib.Path, max_file_bytes: int) -> tuple[bool, list, list]
     for ruta in dict.fromkeys(r for r in listado.split("\0") if r):
         try:
             grande = (root / ruta).stat().st_size > max_file_bytes
-        except OSError:
+        except OSError:  # ya no existe: la captura registra el borrado
             grande = False
         (omitidos if grande else a_capturar).append(ruta)
     return True, a_capturar, omitidos
@@ -100,19 +96,11 @@ def _pesados(root: pathlib.Path, max_file_bytes: int) -> tuple[bool, list, list]
 
 def create_checkpoint(root: pathlib.Path, conversation_id: str,
                       exclude_patterns=(), max_file_bytes: int = 0) -> tuple[bool, str, list]:
-    """Captura el árbol completo del proyecto. Devuelve (ok, sha o motivo del fallo, omitidos).
-
-    `exclude_patterns` son expresiones regulares de rutas que nunca entran en la captura.
-    Con `max_file_bytes`, los archivos más grandes quedan fuera: leerlos y comprimirlos es
-    lo que vuelve lenta la captura en proyectos con datos. `omitidos` lista todo lo que la
-    captura deja fuera, para que la restauración no lo toque.
-    """
+    """Captura el proyecto en un commit sin padre. Devuelve (ok, sha o motivo, omitidos)."""
     if not is_repository(root):
         return False, "el proyecto no es un repositorio git", []
 
-    # Índice temporal: `git add -A` sobre él no altera el índice real de la persona. Parte
-    # de una copia de ese índice, no de cero: lo que se omite conserva así la versión que
-    # git ya conoce. Una captura sin la entrada haría que `git restore` borrase el archivo.
+    # Copia del índice real: no toca el de la persona, y lo omitido conserva su versión en git.
     tmp_index = pathlib.Path(tempfile.gettempdir()) / f"automode_index_{os.getpid()}_{id(root)}"
     entorno = {"GIT_INDEX_FILE": str(tmp_index), "GIT_LITERAL_PATHSPECS": "1"}
     omitidos = []
@@ -139,10 +127,7 @@ def create_checkpoint(root: pathlib.Path, conversation_id: str,
         if not ok:
             return False, f"no se pudo preparar el índice ({detalle[:120]})", []
 
-        # Se sacan del índice temporal antes de escribir el árbol: lo que no está en el
-        # índice no llega al commit.
-        # Las credenciales salen de la captura aunque git las siga. Cuentan como omitidas:
-        # si estuvieran commiteadas, restaurar la captura entera las borraría.
+        # Las credenciales salen de la captura aunque git las siga, y cuentan como omitidas.
         if exclude_patterns:
             ok, listado = _git(["ls-files", "-z"], root, entorno)
             if not ok:
@@ -160,8 +145,6 @@ def create_checkpoint(root: pathlib.Path, conversation_id: str,
 
         marca = datetime.now().isoformat(timespec="seconds")
         mensaje = f"checkpoint automode {marca} (conversacion {conversation_id or 'sin_id'})"
-        # Sin padre: la captura queda fuera del historial de trabajo y solo la alcanza
-        # su referencia, así que no ensucia `git log` ni la rama actual.
         ok, sha = _git(["commit-tree", tree, "-m", mensaje], root, entorno)
         if not ok or not sha:
             return False, f"no se pudo crear el commit ({sha[:120]})", []
@@ -197,22 +180,12 @@ def ensure_checkpoint(
     max_file_bytes: int = 0,
     keep_last: int = 0,
 ) -> tuple[bool, str]:
-    """Garantiza una captura reciente antes de un cambio destructivo.
-
-    Devuelve (hay_respaldo, detalle). No recaptura si ya hay una dentro del intervalo:
-    el objetivo es poder volver al estado previo al bloque de trabajo, no versionar
-    cada paso. Con `keep_last`, solo se conservan las capturas de las últimas
-    conversaciones.
-    """
+    """Captura el proyecto si no hay una captura reciente. Devuelve (hay_respaldo, detalle)."""
     registro = _read_registry(state_dir)
     previo = registro.get(conversation_id or "sin_id")
     ahora = datetime.now()
 
-    # Una captura previa solo cuenta si es de ESTE proyecto y todavía existe. Sin estas
-    # dos comprobaciones, el registro basta para afirmar que hay respaldo: un `state/`
-    # copiado de otro proyecto —o una referencia borrada por una limpieza de git— haría
-    # que el motor apruebe la edición prometiendo una reversibilidad que no existe.
-    # Se observó al copiar `.agents/` completo a un proyecto nuevo.
+    # Una captura previa solo vale si es de este proyecto y su referencia sigue existiendo.
     if previo and _mismo_proyecto(previo, root) and ref_exists(root, previo.get("ref", "")):
         try:
             transcurrido = (ahora - datetime.fromisoformat(previo["ts"])).total_seconds()
@@ -247,11 +220,7 @@ def ensure_checkpoint(
 
 
 def _prune_refs(root: pathlib.Path, keep_last: int, actual: str) -> None:
-    """Borra las capturas de conversaciones antiguas; conserva las `keep_last` más recientes.
-
-    Sin esto cada conversación deja una referencia para siempre y `.git` solo crece.
-    Borrar la referencia basta: git descarta los objetos huérfanos en su limpieza habitual.
-    """
+    """Borra las capturas antiguas y conserva las de las `keep_last` conversaciones más recientes."""
     ok, salida = _git(["for-each-ref", "--sort=-committerdate", "--format=%(refname)",
                        REF_PREFIX], root)
     if not ok:
@@ -266,10 +235,6 @@ def omitted_paths(state_dir: pathlib.Path, conversation_id: str) -> list:
 
 
 def restore_hint(conversation_id: str, omitidos=()) -> str:
-    """Orden de git para volver al estado capturado.
-
-    Excluye lo que la captura dejó fuera: restaurar sin excluirlo devolvería esos archivos
-    a su versión en git, o los borraría si git no la tiene, pisando lo que haya ahora.
-    """
+    """Orden para restaurar la captura, excluyendo lo que no se respaldó."""
     excluir = "".join(f" ':(exclude){r}'" for r in omitidos)
     return f"git restore --source={_safe_ref(conversation_id)} -- .{excluir}"

@@ -8,6 +8,8 @@ Lo que no es código pero explica por qué el código es así.
 - Salida por stdout, solo el JSON de decisión: `{"decision": "allow"|"deny", "reason"}`. Todo diagnóstico va al registro de auditoría.
 - Con `--dangerously-skip-permissions`, agy respeta el `deny` del hook pero **ejecuta el `ask` sin preguntar**. Por eso no existe el veredicto `ask`, y cualquier error interno del hook deniega.
 - Si el hook no puede ejecutarse (Python ausente, comando inexistente), agy bloquea la acción (medido con agy 1.2.11).
+- `force_ask` también se ejecuta sin preguntar: el cortacircuitos mantiene la denegación en vez de escalar.
+- En el modo plan de agy, un `allow` del hook no siempre basta y agy vuelve a preguntar; `permissionOverrides: ["command(<comando exacto>)"]` lo evita sin conceder nada más amplio.
 
 ## Juez
 
@@ -27,3 +29,4 @@ Lo que no es código pero explica por qué el código es así.
 
 - Se extraen solo los mensajes auténticos del usuario del transcript (`USER_EXPLICIT`, `USER_INPUT`); se descarta el razonamiento, las salidas de herramientas y las respuestas del modelo.
 - Cuando hay un plan aprobado en `brain/<conversationId>/`, ese plan es la vara del trabajo, no los últimos mensajes sueltos.
+- El payload del hook no dice en qué modo está agy, y el tipo de paso `PLANNER_RESPONSE` aparece incluso sin `/plan`: la fase se deduce del último `/plan` o frase de aprobación que escribió la persona.

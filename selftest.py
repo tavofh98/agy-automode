@@ -12,9 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 HERE = pathlib.Path(__file__).resolve().parent
 HOOK = HERE / "pretooluse.py"
-# Proyecto desechable sobre el que trabaja la batería. El guardián puede vivir fuera de
-# todo proyecto (instalación global), así que no se prueba contra la carpeta que lo
-# contiene; tampoco se escriben capturas en un repositorio real.
+# Proyecto desechable: las capturas nunca se escriben en un repositorio real.
 ROOT = tempfile.mkdtemp(prefix="automode_selftest_repo_")
 
 STATE_DIR = None
@@ -34,8 +32,7 @@ CASES_AUTO = [
     case("tests", {"CommandLine": "pytest -q"}, "allow"),
     case("formateador", {"CommandLine": "ruff check ."}, "allow"),
     case("edición en proyecto (auto)", {"TargetFile": f"{ROOT}/main.py"}, "allow", "propose_code"),
-    # Regresión de la Fase 0: el CONTENIDO de un archivo no es una ruta. Escribir un
-    # README que menciona `pruebas/banco` se leía como escritura fuera del proyecto.
+    # El contenido de un archivo no es una ruta.
     case(
         "contenido con pinta de ruta",
         {"TargetFile": f"{ROOT}/README.md",
@@ -64,8 +61,6 @@ CASES_AUTO = [
     case("leer clave ssh", {"AbsolutePath": "~/.ssh/id_rsa"}, "deny", "view_file"),
     case("editar el hook", {"TargetFile": f"{ROOT}/.agents/hooks.json"}, "deny", "propose_code"),
     case("borrar el auto mode", {"CommandLine": "rm .agents/automode/pretooluse.py"}, "deny"),
-    # Las rutas se revisan pieza a pieza dentro del comando. Mirando el comando entero,
-    # `.env` precedido de un espacio y `.agents` precedido de `:` pasaban sin tocar regla.
     case("leer .env con cat", {"CommandLine": "cat .env"}, "deny"),
     case("leer .env con Get-Content", {"CommandLine": "Get-Content .env"}, "deny"),
     case("política vía git show", {"CommandLine": "git show HEAD:.agents/plugins/automode/policy.toml"}, "deny"),
@@ -76,8 +71,7 @@ CASES_AUTO = [
     case("Test-Path", {"CommandLine": "Test-Path salida"}, "allow"),
     case("Get-Content", {"CommandLine": "Get-Content README.md -TotalCount 20"}, "allow"),
     case("tubería de lectura", {"CommandLine": "Get-ChildItem salida | Select-Object Name, Length"}, "allow"),
-    # Un comando "seguro" deja de serlo cuando apunta fuera del proyecto o cuando lleva
-    # código incrustado: esos casos van al juez (aquí, sin juez, se deniegan).
+    # Fuera del proyecto o con código incrustado van al juez (aquí, sin juez, se deniegan).
     case("lectura segura fuera del proyecto", {"CommandLine": "Get-ChildItem C:/Users"}, "deny"),
     case("cat fuera del proyecto", {"CommandLine": "cat C:/Windows/win.ini"}, "deny"),
     case("bloque de script en Select-Object", {"CommandLine": "Get-ChildItem | Select-Object @{n='x';e={Remove-Item a.txt}}"}, "deny"),
@@ -86,24 +80,16 @@ CASES_AUTO = [
     # Descartar o unir la salida de errores no escribe nada del proyecto.
     case("errores unidos a la salida", {"CommandLine": "pytest -q 2>&1"}, "allow"),
     case("errores descartados", {"CommandLine": "Get-ChildItem salida 2>$null | Out-Null"}, "allow"),
-    # Con una variable o una unidad de PowerShell no se sabe qué se lee: `env:` guarda
-    # las claves de API de la sesión.
     case("variables de entorno", {"CommandLine": "Get-Content env:OPENAI_API_KEY"}, "deny"),
     case("ruta con variable", {"CommandLine": "Get-Content $env:USERPROFILE\\Documents\\notas.txt"}, "deny"),
     # La autoprotección cubre `.agents`, no cualquier carpeta llamada `agents` del proyecto.
     case("carpeta agents del proyecto", {"TargetFile": f"{ROOT}/agents/main.py"}, "allow", "write_to_file"),
 
-    # ── Sin clasificador disponible, lo complejo se deniega (fallback seguro) ──
-    #
-    # La batería corre con el backend en "none", así que estos casos miden la degradación,
-    # no el criterio del modelo. Antes caían en `ask`; hoy en `deny`, porque se midió que
-    # en sesión desatendida un `ask` se ejecuta sin que nadie lo revise. El agente recibe
-    # el motivo y puede buscar otra vía.
+    # ── Sin clasificador (backend "none"), lo que iría al juez se deniega ──
     case("push a rama propia (fallback)", {"CommandLine": "git push origin mi-rama"}, "deny"),
     case("instalar dependencia (fallback)", {"CommandLine": "pip install requests"}, "deny"),
     case("escritura fuera", {"TargetFile": "C:/Windows/Temp/x.py"}, "deny", "propose_code"),
-    # `git init` es la salida que el motor sugiere cuando no hay respaldo posible: tiene
-    # que estar entre los seguros o el consejo sería un callejón sin salida.
+    # `git init` es la salida que el motor sugiere cuando no hay respaldo.
     case("git init", {"CommandLine": "git init"}, "allow"),
     # agy guarda sus artefactos de planeación fuera del workspace: raíz extra declarada.
     case(
@@ -118,15 +104,12 @@ CASES_PLAN = [
     # ── Modo Plan: lectura libre; python, edición y comandos con efectos los juzga el clasificador ──
     case("plan: lectura archivo", {"AbsolutePath": f"{ROOT}/main.py"}, "allow", "view_file"),
     case("plan: git status", {"CommandLine": "git status"}, "allow"),
-    # Python ya no tiene vía rápida: va al clasificador, que aquí (backend "none") no
-    # puede pronunciarse y deniega. `deny` prueba que ninguna regla lo aprueba en seco.
+    # Python no tiene vía rápida: `deny` prueba que ninguna regla lo aprueba en seco.
     case("plan: python exploratorio", {"CommandLine": "python consultas/explorar.py"}, "deny"),
     case("plan: python -c inline", {"CommandLine": 'python -c "import sys; print(sys.version)"'}, "deny"),
     case("plan: uv run python", {"CommandLine": "uv run python script.py"}, "deny"),
     case("plan: pip install vía python", {"CommandLine": "python -m pip install openpyxl"}, "deny"),
-    # En modo plan la edición y los comandos con efectos ya no los corta una regla: los
-    # juzga el clasificador con la fase como contexto. Aquí, con el backend en "none",
-    # se comprueba la degradación segura de ese camino.
+    # En plan, la edición y los comandos con efectos los juzga el clasificador.
     case("plan: edición en código", {"TargetFile": f"{ROOT}/main.py"}, "deny", "propose_code"),
     case("plan: git commit", {"CommandLine": 'git commit -m "wip"'}, "deny"),
     case("plan: pip install", {"CommandLine": "pip install requests"}, "deny"),
@@ -148,8 +131,7 @@ def invoke(tool, args, conversation_id, mode="auto", extra_env=None):
         "AGY_AUTOMODE_STATE": STATE_DIR,
         "AGY_MODE": mode,
         "PYTHONIOENCODING": "utf-8",
-        # La batería no toca la red: sin backend, el caso intermedio cae en `ask` de
-        # forma determinista, que es justo lo que afirman los casos "(fallback)".
+        # Sin red ni juez: lo que iría al clasificador se deniega de forma determinista.
         "AGY_AUTOMODE_BACKEND": "none",
         **(extra_env or {}),
     }
@@ -212,8 +194,7 @@ def test_backend_agy() -> list[str]:
     muestras = [
         ('{"decision":"allow","reason":"ok"}', "allow"),
         ('```json\n{"decision": "deny", "reason": "credenciales"}\n```', "deny"),
-        # El veredicto es binario: un `ask` del modelo se lee como `deny`, porque en
-        # sesión desatendida no hay nadie a quien devolverle la decisión.
+        # Un `ask` del modelo se lee como `deny`.
         ('Claro, aquí tienes:\n{"decision":"ask","reason":"ambiguo"}\nEspero que sirva.', "deny"),
     ]
     for texto, esperado in muestras:
@@ -226,9 +207,7 @@ def test_backend_agy() -> list[str]:
         if extract_decision(basura) is not None:
             failures.append(f"extract_decision: aceptó una salida inválida {basura!r}")
 
-    # 3. Binario ausente -> deny marcado como técnico. Nunca hacia allow, y nunca hacia
-    #    `ask`, que en sesión desatendida se ejecutaría. La marca es lo que impide que un
-    #    problema de infraestructura dispare el cortacircuitos.
+    # 3. Binario ausente -> deny marcado como técnico, que no cuenta para el cortacircuitos.
     dec, motivo = classify_with_agy(
         user_intent="probar", tool_name="run_command",
         tool_args={"CommandLine": "echo hola"},
@@ -319,17 +298,13 @@ def test_alcance_y_respaldo() -> list[str]:
             )
             if "main.py" not in (r.stdout or "").splitlines():
                 failures.append("create_checkpoint: el árbol capturado no contiene los archivos esperados")
-            # La política marca el .env como sensible: las capturas no deben arrastrar
-            # credenciales, lo mencione o no el .gitignore del proyecto.
+            # El .env queda fuera aunque el .gitignore no lo mencione.
             if "\n.env" in (r.stdout or "") or (r.stdout or "").startswith(".env"):
                 failures.append("create_checkpoint: capturó el .env, que debe quedar excluido")
     else:
         failures.append("el repositorio de pruebas no es un repo git: no se pudo verificar la captura")
 
-    # 5b. Un registro de capturas heredado de otro proyecto no vale como respaldo.
-    #     Copiar `.agents/` completo a un proyecto nuevo arrastra `checkpoints.json`, y
-    #     antes bastaba con esa anotación para aprobar la edición: la promesa de
-    #     reversibilidad se sostenía sobre una captura que allí no existe.
+    # 5b. Un registro de capturas copiado de otro proyecto no vale como respaldo.
     with tempfile.TemporaryDirectory() as nuevo:
         proyecto = pathlib.Path(nuevo) / "proyecto"
         proyecto.mkdir()
@@ -352,8 +327,7 @@ def test_alcance_y_respaldo() -> list[str]:
         elif not ref_exists(proyecto, "refs/automode/conversacion_heredada"):
             failures.append("registro heredado: se afirmó respaldo sin crear la referencia")
 
-    # 5c. Los archivos pesados quedan fuera de la captura, y restaurar no los pisa ni los
-    #     borra: una captura sin su entrada haría que `git restore -- .` los eliminase.
+    # 5c. Los archivos pesados quedan fuera de la captura, y restaurar no los pisa ni los borra.
     with tempfile.TemporaryDirectory() as tmp:
         proyecto = pathlib.Path(tmp)
         git = lambda *a: subprocess.run(["git", *a], cwd=tmp, capture_output=True, text=True)
@@ -401,14 +375,11 @@ def test_alcance_y_respaldo() -> list[str]:
             "propose_code", {"TargetFile": f"{payload_dir}/x.py"}, "alcance_sin_git", mode="auto",
             extra_env={"AGY_AUTOMODE_WS": payload_dir},
         )
-        # El workspace del payload sigue siendo ROOT, así que esta escritura cae fuera:
-        # basta con comprobar que no se aprueba a ciegas.
+        # El workspace sigue siendo ROOT: la escritura cae fuera y no debe aprobarse a ciegas.
         if got == "allow":
             failures.append("escritura fuera del proyecto sin respaldo: se aprobó")
 
-    # 7. El motivo de "sin respaldo" tiene que ser accionable: el agente resuelve el
-    #    bloqueo por su cuenta ejecutando `git init`, sin que nadie apruebe nada. Si el
-    #    mensaje no dice qué hacer, la denegación es un callejón sin salida.
+    # 7. El motivo de "sin respaldo" dice cómo resolverlo: `git init`.
     with tempfile.TemporaryDirectory() as sin_git:
         proyecto = pathlib.Path(sin_git) / "proyecto_sin_git"
         proyecto.mkdir()
@@ -470,15 +441,12 @@ def test_fase_por_conversacion() -> list[str]:
         if got != esperado:
             failures.append(f"detect_phase [{nombre}]: esperaba {esperado}, obtuvo {got}")
 
-    # La misma edición, dos respuestas según la fase que marcó la conversación. Mientras
-    # se planea la juzga el clasificador —aquí desactivado, de ahí el `deny`—; tras la
-    # aprobación es una edición corriente dentro del proyecto.
+    # La misma edición: en plan va al clasificador (aquí `deny`); tras aprobar, se permite.
     for nombre, mensajes, esperado in [
         ("planeando", ["/plan Quiero una herramienta"], "deny"),
         ("ejecutando", ["/plan Quiero una herramienta", "Aprobado, ejecutalo en modo automatico"], "allow"),
     ]:
-        # No se usa invoke() porque fija AGY_MODE, y aquí lo que se prueba es
-        # justamente que mande la conversación cuando no hay override.
+        # Sin invoke(), que fija AGY_MODE: aquí debe mandar la conversación.
         payload = {
             "toolCall": {"name": "write_to_file", "args": {"TargetFile": f"{ROOT}/x.py"}},
             "stepIdx": 9, "conversationId": f"fase_e2e_{nombre}", "workspacePaths": [ROOT],
@@ -547,9 +515,7 @@ def main() -> int:
     if not ok_recovery:
         failures.append(f"recuperación: esperaba allow, obtuvo {recovery}")
 
-    # Las denegaciones técnicas —el clasificador que no pudo pronunciarse— no son el
-    # agente insistiendo, y no deben escalar. Sin esta distinción, tres timeouts seguidos
-    # detendrían la sesión por un problema de infraestructura.
+    # Las denegaciones técnicas no cuentan para el cortacircuitos.
     tecnicas = [
         invoke("made_up_tool", {"X": f"y{i}"}, "case_breaker_tecnico", mode="auto")
         for i in range(4)

@@ -9,16 +9,7 @@ def extract_user_intent(
     max_turns: int = 3,
     fallback: str = "",
 ) -> str:
-    """Extrae las últimas instrucciones auténticas del usuario.
-
-    Args:
-        transcript_path: Ruta al archivo de transcript (.jsonl).
-        max_turns: Número máximo de turnos recientes del usuario a incluir.
-        fallback: Texto por defecto si no hay transcript disponible.
-
-    Returns:
-        Cadena con las instrucciones del usuario concatenadas.
-    """
+    """Últimas instrucciones auténticas del usuario, sin nada escrito por el modelo."""
     if not transcript_path:
         return fallback.strip()
 
@@ -38,7 +29,6 @@ def extract_user_intent(
                 except ValueError:
                     continue
 
-                # Identificar mensajes provenientes del usuario
                 source = record.get("source", "")
                 step_type = record.get("type", "")
 
@@ -67,7 +57,6 @@ def extract_user_intent(
     if not user_messages:
         return fallback.strip()
 
-    # Tomar los últimos turnos relevantes
     recent = user_messages[-max_turns:]
     return "\n---\n".join(recent)
 
@@ -78,18 +67,8 @@ def read_work_objective(
     max_chars: int = 4000,
     artifact_dir: str = "",
 ) -> str:
-    """Lee el plan aprobado de la conversación, si existe.
-
-    agy deposita sus artefactos de planeación en `<plan_root>/<conversationId>/`. Se
-    toma el markdown más reciente de esa carpeta: es el documento que la persona
-    aprobó y, por tanto, la definición operativa de "dentro de los objetivos".
-
-    Devuelve "" si no hay plan. Un bloque de trabajo sin plan no es un error: significa
-    que el clasificador se queda con la intención extraída del transcript.
-    """
-    # `artifactDirectoryPath` viene en el payload del hook y es la fuente correcta:
-    # la ruta cambia entre CLI, IDE y Antigravity 2.0, así que fijarla en la política
-    # solo funciona por coincidencia. `plan_root` queda como respaldo.
+    """Markdown más reciente de la carpeta de artefactos de la conversación, o "" si no hay."""
+    # Manda `artifactDirectoryPath` del payload: la ruta cambia entre CLI, IDE y Antigravity 2.0.
     base = None
     if artifact_dir:
         candidata = pathlib.Path(os.path.expandvars(os.path.expanduser(artifact_dir)))
@@ -136,21 +115,7 @@ def detect_phase(
     plan_triggers: list,
     auto_triggers: list,
 ) -> str | None:
-    """Deduce la fase del trabajo leyendo lo que la persona escribió.
-
-    El payload del hook no trae el modo de agy: los campos comunes son
-    conversationId, workspacePaths, transcriptPath, artifactDirectoryPath y
-    modelName, y ninguno lo expone. Tampoco sirve el tipo de paso —
-    `PLANNER_RESPONSE` aparece en conversaciones que jamás usaron `/plan`.
-
-    Lo que sí queda registrado es la orden de la persona. `/plan` es el mismo acto
-    que pone a agy en modo plan, así que ambos modos quedan gobernados por el mismo
-    disparador. La frase de aprobación abre la fase de ejecución.
-
-    Se recorre en orden y gana el último disparador: dentro de una conversación se
-    puede planear, ejecutar y volver a planear. Devuelve "plan", "auto" o None si
-    la persona no ha indicado nada.
-    """
+    """Fase según lo que escribió la persona: "plan", "auto" o None. Gana el último disparador."""
     if not transcript_path:
         return None
     path = pathlib.Path(transcript_path)

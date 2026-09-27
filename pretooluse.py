@@ -86,14 +86,7 @@ def safe_id(conversation_id: str) -> str:
 
 
 def state_dir_for(payload: dict, policy: dict) -> pathlib.Path:
-    """Carpeta de estado de la conversación: audit, contadores, capturas y caché.
-
-    Vive en la carpeta que agy crea para cada conversación (`brain/<id>/`), no en
-    `.agents`: con una instalación compartida por varios proyectos, dos conversaciones
-    escribirían a la vez en los mismos archivos. La subcarpeta se llama `.agents` para
-    que la auto-protección impida al agente manipular su propio estado, aunque `brain/`
-    esté entre sus raíces de escritura.
-    """
+    """Estado de la conversación, en `brain/<id>/.agents/automode/`: fuera del alcance del agente."""
     conversation_id = payload.get("conversationId") or ""
     # La batería de pruebas redirige el estado a un directorio efímero, con una
     # subcarpeta por conversación simulada.
@@ -113,15 +106,7 @@ def state_dir_for(payload: dict, policy: dict) -> pathlib.Path:
 
 
 def collect_strings(value, acc: list, skip_keys: set | None = None) -> list:
-    """Recolecta recursivamente toda cadena dentro de los argumentos.
-
-    Los nombres de argumento varían por herramienta, así que inspeccionamos todos los
-    valores en lugar de confiar en claves concretas. La excepción son las claves de
-    `skip_keys`: el **contenido** de un archivo que se va a escribir no es una ruta ni
-    un comando, y tratarlo como tal produce falsos positivos. Se observó en el corpus:
-    escribir un `README.md` cuyo texto mencionaba `pruebas/banco` se clasificó como
-    "escritura fuera del proyecto".
-    """
+    """Todas las cadenas de los argumentos, salvo las de `skip_keys`, que son contenido y no rutas."""
     skip_keys = skip_keys or set()
     if isinstance(value, str):
         acc.append(value)
@@ -148,11 +133,7 @@ def looks_like_path(text: str) -> bool:
 
 
 def unwrap_quotes(text: str) -> str:
-    """Quita comillas externas equilibradas.
-
-    Se observó en transcripts reales que `CommandLine` a veces llega envuelto en
-    comillas adicionales.
-    """
+    """Quita comillas externas equilibradas: `CommandLine` a veces llega envuelto en ellas."""
     t = text.strip()
     while len(t) >= 2 and t[0] == t[-1] and t[0] in "\"'":
         t = t[1:-1].strip()
@@ -189,27 +170,17 @@ def split_segments(command: str) -> list:
 
 
 def command_tokens(command: str) -> list:
-    """Piezas de un comando que pueden ser rutas.
-
-    Las reglas de rutas están escritas para una ruta aislada, no para un comando entero:
-    en `cat .env` el `.env` va precedido de un espacio y en
-    `git show HEAD:.agents/policy.toml` el `.agents` va precedido de `:`. Sin partir el
-    comando, las dos lecturas pasaban como comandos seguros.
-    """
+    """Piezas de un comando que pueden ser rutas, como `.env` en `cat .env`."""
     return [t for t in re.split(r"""[\s"'`=:(),;|&<>{}\[\]]+""", command) if t]
 
 
-# Construcciones que ejecutan código dentro de un comando de apariencia inofensiva:
-# subexpresiones `$(...)`, bloques de script `{...}` (Select-Object @{e={...}}), el
-# acento grave de sustitución y la redirección `>`, que sobrescribe archivos.
+# Código incrustado en un comando de apariencia inofensiva: `$(...)`, `{...}`, acento grave y `>`.
 EMBEDDED_CODE = re.compile(r"\$\(|[{}`>]")
 
 # Redirecciones que solo descartan o unen la salida de errores: no escriben en el proyecto.
 HARMLESS_REDIRECT = re.compile(r"\s*(?:[12*]?>\s*(?:\$null|/dev/null|nul)\b|[12]>&[12])", re.I)
 
-# Con una variable o una unidad de PowerShell la ruta real no se conoce sin ejecutar el
-# comando: `$env:USERPROFILE\...` escapa del rastreo de rutas y `env:` guarda las claves
-# de API de la sesión.
+# Con variables o unidades de PowerShell (`env:` guarda claves de API) la ruta real no se conoce.
 UNRESOLVED_PATH = re.compile(
     r"\$[\w{:]|%\w+%|(?<![\w-])(?:env|variable|function|alias|hklm|hkcu|cert|wsman):", re.I)
 
@@ -275,24 +246,12 @@ def write_counters(data: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def judge_disabled() -> bool:
-    """¿La persona lanzó la sesión con `AGY_AUTOMODE=off`?
-
-    Apaga solo lo que cuesta tiempo: el clasificador y la captura git. Las líneas rojas
-    —auto-protección, credenciales y comandos bloqueados— se siguen aplicando, porque son
-    instantáneas y son el freno ante un desastre. La variable la fija quien abre la sesión:
-    un `$env:` dentro de un comando del agente no llega al proceso de agy que lanza el hook.
-    """
+    """Sesión lanzada con `AGY_AUTOMODE=off`: sin juez ni captura; las líneas rojas siguen."""
     return os.environ.get("AGY_AUTOMODE", "").strip().lower() == "off"
 
 
 def get_active_mode(policy: dict, payload: dict | None = None) -> str:
-    """Modo vigente, por precedencia: entorno > conversación > política.
-
-    La variable `AGY_MODE` manda porque es un override deliberado de la persona. Por
-    debajo, la conversación: quien escribe `/plan` está poniendo a agy en modo plan, y
-    ese mismo mensaje pone aquí la fase de planeación. Al final, el valor fijo de
-    `policy.toml`, que es lo que rige cuando no hay transcript ni override.
-    """
+    """Modo vigente, por precedencia: `AGY_MODE` > lo que escribió la persona > `policy.toml`."""
     env_mode = os.environ.get("AGY_MODE", "").strip().lower()
     if env_mode in ("plan", "auto"):
         return env_mode
@@ -311,19 +270,10 @@ def get_active_mode(policy: dict, payload: dict | None = None) -> str:
 
 
 def command_targets_outside(command: str, roots: list) -> str | None:
-    """Devuelve la primera ruta del comando que cae fuera del proyecto, si la hay.
-
-    Le dice al clasificador si el comando se sale del proyecto. Python ya no tiene vía
-    rápida en modo plan: juzgarlo por su primera palabra dejaba pasar sin revisión
-    tanto `python -m pip install` como un `python -c` que borrase archivos (conversación
-    68da1f0a, s12). Como hace el auto mode de Claude Code con `Bash(python*)`, todo
-    intérprete pasa por el clasificador.
-    """
+    """Primera ruta del comando que cae fuera del proyecto, si la hay."""
     if not roots:
         return None
-    # Se rastrean rutas dentro de todo el comando, no argumentos sueltos: dentro de un
-    # `python -c "..."` la ruta viaja anidada entre comillas y pegada al código que la
-    # rodea, de modo que partir por espacios no la encuentra.
+    # Se rastrea el comando entero: en `python -c "..."` la ruta va pegada al código.
     fin = r"""[^\s"'()\[\],;:]*"""
     patrones = [
         # C:\... o C:/... El lookbehind descarta esquemas de URL (`https://`), donde la
@@ -348,13 +298,7 @@ def root_of(roots: list) -> pathlib.Path:
 
 
 def work_objective(payload: dict | None, policy: dict) -> str:
-    """Define contra qué se mide si una acción pertenece al trabajo en curso.
-
-    Dos fuentes, complementarias: el **plan aprobado** —que es el encargo formal, y en
-    modo auto la autorización misma— y las **últimas instrucciones auténticas** del
-    usuario, que es lo único disponible mientras aún se está planificando. Ambas pasan
-    por filtros reasoning-blind: nunca entra aquí el razonamiento del propio modelo.
-    """
+    """Vara del trabajo: el plan aprobado y las últimas instrucciones del usuario."""
     if not payload:
         return ""
     cfg = policy.get("classifier", {})
@@ -377,13 +321,7 @@ def work_objective(payload: dict | None, policy: dict) -> str:
 
 
 def sin_respaldo(detalle: str) -> str:
-    """Motivo accionable cuando no hay respaldo posible.
-
-    El hook fiscaliza, no muta el proyecto: no ejecuta `git init` por su cuenta, porque
-    un guardián con efectos sobre el disco puede sorprender dentro de un monorepo. En su
-    lugar nombra el obstáculo y la salida, y el agente la toma por el camino normal
-    —`git init` está entre los comandos seguros—, sin que nadie tenga que aprobar nada.
-    """
+    """Motivo cuando no hay respaldo: el hook no ejecuta `git init`, le pide al agente que lo haga."""
     return (
         f"Sin respaldo del proyecto ({detalle}). Ejecuta `git init` en la raíz del "
         "proyecto y reintenta: el auto mode necesita poder deshacer antes de modificar."
@@ -391,14 +329,7 @@ def sin_respaldo(detalle: str) -> str:
 
 
 def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
-    """Asegura que exista una captura del proyecto antes de un cambio destructivo.
-
-    Devuelve (hay_respaldo, capturado, detalle). Con `require = false` la ausencia de
-    respaldo se reporta pero no frena: es la salida para proyectos que no son repositorios y
-    donde la persona acepta ese riesgo a conciencia. `capturado` dice si de verdad existe una
-    captura: con `AGY_AUTOMODE=off`, con las capturas desactivadas o con `require = false` se
-    deja pasar sin ella, y entonces el motivo no puede prometer que el cambio se pueda deshacer.
-    """
+    """Captura el proyecto antes de un cambio. Devuelve (hay_respaldo, capturado, detalle)."""
     if judge_disabled():
         return True, False, "sesión con AGY_AUTOMODE=off"
     cfg = policy.get("checkpoint", {})
@@ -431,11 +362,7 @@ def classify(
     root_dir: pathlib.Path,
     context: dict | None = None,
 ) -> tuple:
-    """Consulta al clasificador `agy`.
-
-    El veredicto es binario: `allow` o `deny`. Ante un fallo del propio clasificador se
-    deniega con la marca técnica, nunca se deja pasar (ver `[classifier] on_failure`).
-    """
+    """Consulta al juez `agy`. Ante un fallo del juez, deniega."""
     if judge_disabled():
         return "allow", "Sin clasificador: sesión lanzada con AGY_AUTOMODE=off."
     # La batería de pruebas pone AGY_AUTOMODE_BACKEND=none para no lanzar agy en cada caso.
@@ -478,9 +405,7 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
     if not segments:
         return "deny", "Comando vacío o no interpretable: no hay nada que autorizar.", None
 
-    # 2. Comprobar si todos los segmentos son comandos inequívocamente seguros. Un comando
-    #    de la lista deja de serlo si lleva código incrustado o si apunta fuera del
-    #    proyecto: leer fuera no destruye nada, pero se juzga igual que con view_file.
+    # 2. Seguro si todos los segmentos lo son, sin código incrustado ni rutas fuera del proyecto.
     def is_safe(seg: str) -> bool:
         limpio = HARMLESS_REDIRECT.sub("", seg)
         return bool(match_any(limpio, [r"^\s*" + p for p in safe])
@@ -493,9 +418,7 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
     if all_safe and not fuera:
         return "allow", "Todos los segmentos son comandos de solo consulta o verificación.", None
 
-    # 3. Todo lo demás lo juzga el clasificador, en ambos modos. La fase viaja como
-    #    contexto: no es lo mismo compilar mientras se planifica que tras la aprobación,
-    #    y esa diferencia la pondera quien tiene el objetivo del trabajo delante.
+    # 3. Todo lo demás lo juzga el clasificador, con la fase como contexto.
     if not policy.get("classifier", {}).get("enabled", True):
         return "deny", f"Clasificador deshabilitado por política; comando no reconocido como seguro: {command[:120]}", None
 
@@ -568,13 +491,7 @@ def decide(payload: dict, policy: dict) -> tuple:
     if key and isinstance(args.get(key), str):
         return evaluate_command(args[key], policy, payload)
 
-    # 4. Nivel 1 — solo lectura. Libre dentro del proyecto; fuera, se fiscaliza.
-    #
-    #    Leer no destruye nada, pero explorar fuera del encargo sí es una desviación:
-    #    subir a una carpeta de jerarquía superior "a ver qué hay" no pertenece al
-    #    trabajo. Dentro del workspace se aprueba por regla y en milisegundos, que es
-    #    el caso normal; solo la lectura que se sale pasa por el clasificador, con el
-    #    objetivo del trabajo como vara. Aplica en ambos modos.
+    # 4. Solo lectura: libre dentro del proyecto; fuera, la juzga el clasificador.
     if read_only:
         # Búsquedas de credenciales: la regla equivalente para comandos de shell no
         # cubría los argumentos de las herramientas de búsqueda.
@@ -609,14 +526,10 @@ def decide(payload: dict, policy: dict) -> tuple:
         ]
         outside = [t for t in strings if looks_like_path(t) and not within_roots(t, write_roots)]
 
-        # El motivo nombra el destino real: si una escritura en scratch se etiqueta como
-        # "archivo del proyecto", el agente concluye que scratch también está vetado, y que
-        # la captura del proyecto la cubre, cuando no es así.
+        # El motivo nombra el destino real: scratch no es el proyecto ni lo cubre la captura.
         en_proyecto = any(looks_like_path(t) and within_roots(t, roots) for t in strings)
 
-        # Escribir fuera del proyecto, o escribir mientras se planifica, no son casos que
-        # una regla pueda zanjar: dependen de si la acción pertenece al encargo. Los juzga
-        # el clasificador, que es quien tiene delante el objetivo del trabajo y la fase.
+        # Escribir fuera del proyecto o durante la planeación lo juzga el clasificador.
         if outside or active_mode == "plan":
             motivo = (
                 f"Escritura fuera del proyecto: {outside[0][:120]}" if outside else
@@ -634,9 +547,7 @@ def decide(payload: dict, policy: dict) -> tuple:
                 return "allow", reason, None
             # Aprobado en modo plan: sigue necesitando respaldo, como toda edición.
 
-        # La libertad de modificar se apoya en poder deshacer. Antes del primer cambio
-        # del bloque se captura el estado del proyecto; si no se puede, la afirmación
-        # "reversible" sería falsa, así que se deniega diciendo cómo habilitarlo.
+        # Sin captura posible no se modifica: "reversible" sería falso.
         respaldado, capturado, detalle = guard_checkpoint(payload, policy, roots)
         if not respaldado:
             return "deny", sin_respaldo(detalle), None
@@ -648,9 +559,7 @@ def decide(payload: dict, policy: dict) -> tuple:
         return ("allow", f"Edición dentro del proyecto, sin respaldo ({detalle}): no se puede "
                 "deshacer con git.", None)
 
-    # 6. Herramientas complejas o externas (always_evaluate, etc.). El clasificador
-    #    interviene en ambos modos: la fase es contexto para su juicio, no un motivo
-    #    para prescindir de él.
+    # 6. Herramientas con efectos externos o no declaradas: las juzga el clasificador.
     if policy.get("classifier", {}).get("enabled", True):
         conocida = name in tools.get("always_evaluate", [])
         dec, reason = classify(
@@ -683,17 +592,7 @@ def audit(record: dict) -> None:
 
 
 def permission_overrides(payload: dict, policy: dict, decision: str) -> list:
-    """Concesiones temporales que acompañan a un `allow` sobre un comando.
-
-    Se observó que, en el modo plan de agy, un `allow` del hook no siempre basta:
-    agy vuelve a pedir confirmación con su propia interfaz —la que ofrece «permitir
-    siempre los comandos que empiezan por…»—, sin mostrar nuestro motivo. Ese es
-    justamente el permiso que `permissionOverrides` concede, según el contrato
-    documentado en el binario: `["command(npm test)"]`.
-
-    Se concede el comando exacto que ya se aprobó, ni un prefijo más amplio: la
-    concesión no añade autoridad, solo evita volver a preguntar por lo mismo.
-    """
+    """Concede el comando exacto ya aprobado, para que agy no vuelva a preguntar en su modo plan."""
     if decision != "allow":
         return []
     if not policy.get("mode", {}).get("emit_permission_overrides", True):
@@ -721,11 +620,8 @@ def respond(decision: str, reason: str, overrides: list | None = None) -> None:
 def main() -> int:
     global STATE_DIR
 
-    # Guardia anti-recursión. Si esta variable está definida, quien nos invoca es el
-    # `agy` que el propio auto mode lanzó para clasificar. Ese agente razona sobre
-    # texto y no tiene por qué usar herramienta alguna: denegar corta de raíz la
-    # posibilidad de que el clasificador se llame a sí mismo sin fin. Va antes de leer
-    # la política para que ni siquiera un error de configuración abra el ciclo.
+    # Anti-recursión: quien llama es el agy del juez, que no usa herramientas. Va antes de
+    # leer la política para que ni un error de configuración abra el ciclo.
     if os.environ.get(INFLIGHT_VAR):
         respond("deny", "El clasificador del auto mode no ejecuta herramientas.")
         return 0
@@ -760,12 +656,8 @@ def main() -> int:
     mode = policy.get("mode", {})
     effective = decision
 
-    # Cortacircuitos: insistir en caminos prohibidos indica que el agente está
-    # atascado, no corrigiéndose.
-    #
-    # Las denegaciones por fallo del clasificador quedan fuera de la cuenta. Un timeout
-    # o un corte de red no es el agente empujando contra una prohibición, y tres seguidos
-    # detendrían la sesión por un problema de infraestructura.
+    # Cortacircuitos: insistir en caminos prohibidos es estar atascado. Los fallos técnicos
+    # del clasificador no cuentan.
     tecnica = is_technical(reason)
     conversation_id = payload.get("conversationId") or ""
     counters = read_counters()
@@ -777,12 +669,8 @@ def main() -> int:
     write_counters(counters)
 
     breaker = policy.get("circuit_breaker", {})
-    # Sin supervisión, agy ejecuta un `force_ask` igual que un `ask`: se midió en la
-    # conversación 68da1f0a, donde tras escalar el agente leyó la configuración del hook.
-    # Por eso el cortacircuitos no escala: mantiene la denegación y le pide al agente que
-    # pare, como el auto mode de Claude Code en sesiones que no pueden preguntar. Solo
-    # actúa sobre denegaciones de política, y el total se reinicia al dispararse: de lo
-    # contrario, pasadas 20 denegaciones se bloquearía el resto de la sesión.
+    # No escala a `force_ask` (agy lo ejecuta sin preguntar): mantiene la denegación y pide
+    # parar. El total se reinicia al dispararse para no bloquear el resto de la sesión.
     total_agotado = counters.get("total", 0) >= breaker.get("total_denials", 20)
     if decision == "deny" and not tecnica and (
             counters.get("consecutive", 0) >= breaker.get("consecutive_denials", 3)
