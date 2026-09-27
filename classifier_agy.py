@@ -13,18 +13,13 @@ try:
 except ImportError:
     from automode import judge_pool
 
-# Marca que encabeza el motivo cuando la denegación no expresa un juicio de política sino
-# un guardián que no pudo pronunciarse: binario ausente, timeout, salida ilegible. El
-# motor la usa para no contar estos casos en el cortacircuitos —un fallo de agy no es el
-# agente insistiendo en un camino prohibido— y para decírselo al agente.
+# Encabeza el motivo cuando el juez no pudo pronunciarse: no cuenta para el cortacircuitos.
 TECHNICAL_MARK = "[sin veredicto]"
 
 # Marca que un `agy` es el clasificador y no una sesión de trabajo.
 INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
 
-# El veredicto del clasificador es binario. `ask` se acepta al leer la respuesta —los
-# modelos lo emiten por costumbre— pero se traduce a `deny`: en sesión desatendida, pedir
-# confirmación a nadie equivale a ejecutar sin revisión.
+# `ask` se acepta al leer la respuesta pero vale `deny`: sin nadie mirando, se ejecutaría.
 VALID = ("allow", "ask", "deny")
 EQUIVALENCIAS = {"ask": "deny"}
 
@@ -36,9 +31,7 @@ class DecisionCache:
         self.cache_file = cache_file
 
     def _hash_key(self, user_intent: str, tool_name: str, args: dict, context: dict | None = None) -> str:
-        # El contexto entra en la clave: la misma edición juzgada durante la planeación y
-        # durante la ejecución son dos preguntas distintas, y reutilizar el veredicto de
-        # una para la otra sería un error silencioso.
+        # La fase entra en la clave: la misma acción en plan y en ejecución son preguntas distintas.
         marca = json.dumps(context or {}, sort_keys=True, ensure_ascii=False)
         content = f"{user_intent.strip()}||{tool_name}||{json.dumps(args, sort_keys=True)}||{marca}"
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -73,7 +66,6 @@ class DecisionCache:
                 "reason": reason,
                 "ts": datetime.now().isoformat(timespec="seconds"),
             }
-            # Limitar tamaño de caché a 500 entradas
             if len(data) > 500:
                 oldest = sorted(data.keys(), key=lambda x: data[x].get("ts", ""))[:100]
                 for old in oldest:
@@ -131,12 +123,7 @@ Always return JSON adhering strictly to:
 
 
 def render_context(context: dict | None) -> str:
-    """Sección de contexto que acompaña a la tool call.
-
-    Le dice al clasificador en qué fase está el trabajo y qué regla derivó la consulta.
-    Sin la fase, editar durante la planeación y editar durante la ejecución son la misma
-    pregunta para el modelo, y no lo son.
-    """
+    """Fase del trabajo y motivo de la consulta, que el juez necesita para decidir."""
     if not context:
         return ""
     partes = []
@@ -151,12 +138,7 @@ def render_context(context: dict | None) -> str:
 
 def build_prompt(user_intent: str, tool_name: str, tool_args: dict,
                  context: dict | None = None) -> str:
-    """Arma el prompt completo.
-
-    En modo print no hay canal aparte para la instrucción de sistema, así que
-    `SYSTEM_PROMPT` viaja al inicio del propio prompt. El cierre repite la exigencia
-    de formato porque es la única garantía: el esquema JSON no se aplica aquí.
-    """
+    """Prompt completo: en modo print la instrucción de sistema viaja al inicio."""
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"USER INTENT:\n{user_intent or '(No explicit user instruction found in transcript)'}\n\n"
@@ -170,12 +152,7 @@ def build_prompt(user_intent: str, tool_name: str, tool_args: dict,
 
 
 def resolve_binary(binary: str) -> str:
-    """Devuelve la ruta del ejecutable de agy, o `binary` tal cual si no se encuentra.
-
-    agy lanza el hook con un PATH que no siempre incluye su propia carpeta de
-    instalación: se observó `FileNotFoundError` con el binario presente en
-    `%LOCALAPPDATA%\\agy\\bin`. Por eso, tras buscar en el PATH, se prueba esa ruta.
-    """
+    """Ruta de agy: el PATH del hook no siempre incluye `%LOCALAPPDATA%\\agy\\bin`."""
     found = shutil.which(binary)
     if found:
         return found
@@ -189,19 +166,13 @@ def resolve_binary(binary: str) -> str:
 
 
 def extract_decision(text: str) -> tuple[str, str] | None:
-    """Extrae (decision, reason) del texto devuelto por el modelo.
-
-    Tolera lo que el prompt intenta evitar: cercos markdown y prosa alrededor del
-    objeto. Si no aparece un JSON con una decisión válida, devuelve None y quien
-    llama degrada a `deny`.
-    """
+    """Extrae (decision, reason) aunque venga con prosa o cercos markdown; None si no hay."""
     if not text:
         return None
     candidates = []
     fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if fenced:
         candidates.append(fenced.group(1))
-    # Objetos de primer nivel, del más largo al más corto: el completo primero.
     candidates.extend(re.findall(r"\{[^{}]*\}", text, re.DOTALL))
     candidates.append(text.strip())
 
@@ -221,8 +192,7 @@ def extract_decision(text: str) -> tuple[str, str] | None:
 
 def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
     """Juzga lanzando un `agy --print` nuevo. Devuelve la envoltura o ("deny", motivo)."""
-    # Un `agy` anidado no debe heredar el workspace ni encontrar los hooks: se le da
-    # un directorio propio, vacío y efímero.
+    # El agy anidado corre en un directorio vacío, sin workspace ni hooks.
     env = dict(os.environ)
     env[INFLIGHT_VAR] = "1"
 
@@ -247,9 +217,7 @@ def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
                 stdin=subprocess.DEVNULL,
                 timeout=timeout + 15,
             )
-    # Cada camino de fallo deniega explicando que el obstáculo es técnico, no de política:
-    # así el agente sabe que no está ante una prohibición sino ante un guardián que no
-    # pudo pronunciarse, y `pretooluse.py` no lo cuenta como insistencia.
+    # Los fallos se marcan como técnicos: no son una prohibición ni cuentan como insistencia.
     except FileNotFoundError:
         return "deny", f"{TECHNICAL_MARK} No se encontró el ejecutable '{binary}': el clasificador no pudo emitir veredicto."
     except subprocess.TimeoutExpired:
@@ -262,8 +230,7 @@ def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
         cola = detalle[-1][:120] if detalle else f"código {proc.returncode}"
         return "deny", f"{TECHNICAL_MARK} El clasificador agy falló ({cola}): sin veredicto, no se ejecuta."
 
-    # La envoltura de `--output-format json` es una línea con
-    # {conversation_id, status, response, duration_seconds, num_turns, usage}.
+    # La envoltura de `--output-format json` es una línea JSON con `status` y `response`.
     envelope = None
     for line in reversed((proc.stdout or "").strip().splitlines()):
         line = line.strip()
@@ -290,13 +257,7 @@ def classify_with_agy(
     context: dict | None = None,
     conversation_id: str = "",
 ) -> tuple[str, str]:
-    """Evalúa la tool call lanzando `agy --print`.
-
-    Devuelve (decision, reason). Ante cualquier fallo —binario ausente, timeout,
-    código de salida distinto de cero, salida ilegible— devuelve ('deny', ...): este
-    camino nunca falla hacia `allow`, y tampoco hacia `ask`, que en sesión desatendida
-    se ejecutaría sin que nadie lo revise.
-    """
+    """Juzga la acción con `agy --print`. Ante cualquier fallo devuelve `deny`."""
     cfg = policy.get("classifier", {}).get("agy", {})
     binary = cfg.get("binary", "agy")
     model = cfg.get("model", "gemini-3.8-flash-low")
@@ -309,8 +270,7 @@ def classify_with_agy(
 
     prompt = build_prompt(user_intent, tool_name, tool_args, context)
     envelope = None
-    # El juez de repuesto ahorra el arranque de agy. Si no hay uno listo se arranca para
-    # la próxima consulta y esta se juzga en frío: el auxiliar solo acelera, no decide.
+    # Sin juez de repuesto listo, se arranca para la próxima y esta se juzga en frío.
     if cfg.get("persistent", False):
         envelope = judge_pool.ask(conversation_id, prompt, model, timeout)
         if envelope is None:

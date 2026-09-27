@@ -1,30 +1,17 @@
-# Política del auto mode de agy.
-#
-# Este archivo es la única pieza que necesitas editar para ajustar el comportamiento.
-# Lo lee `pretooluse.py` en cada llamada a herramienta.
-#
-# Las cadenas van entre comillas simples ('...') para que las barras invertidas de las
-# expresiones regulares se tomen literales y no haya que duplicarlas.
+# Política del auto mode de agy: lo único que hay que editar para ajustar su comportamiento.
+# Las cadenas van entre comillas simples para que las barras de las regex se tomen literales.
 
 [mode]
-# Modo de operación simplificado:
-# "plan" -> solo lectura, git de consulta y ejecución de python exploratorio. Edición de código pide confirmación.
-# "auto" -> autonomía prácticamente total. Edición de código libre, comandos evaluados por clasificador.
+# Modo fijo si la conversación no indica otro: "plan" (las ediciones las juzga el clasificador)
+# o "auto" (las ediciones dentro del proyecto se aprueban, con captura previa).
 active = "auto"
 
-# Sigue la conversación: la fase se deduce de lo que escribe la persona, de modo que
-# el modo plan de este auto mode y el `/plan` de agy queden gobernados por el mismo
-# acto. El payload del hook no expone el modo de agy —sus campos comunes son
-# conversationId, workspacePaths, transcriptPath, artifactDirectoryPath y modelName—,
-# así que el disparador compartido es el mensaje, no el estado interno de agy.
-#
-# Precedencia: la variable AGY_MODE gana sobre esto, y esto gana sobre `active`.
+# La fase se deduce de lo que escribe la persona (`/plan`, frase de aprobación).
+# Precedencia: AGY_MODE > conversación > `active`.
 follow_conversation = true
 
-# Acompaña cada `allow` sobre un comando con una concesión temporal
-# `permissionOverrides: ["command(<el comando>)"]`. Sin esto, en el modo plan de agy
-# un `allow` del hook no siempre evita que agy pida confirmación por su cuenta.
-# Concede el comando exacto ya aprobado, no un prefijo: no añade autoridad.
+# Acompaña cada `allow` de un comando con `permissionOverrides` del comando exacto, para que
+# agy no vuelva a preguntar en su modo plan.
 emit_permission_overrides = true
 
 # Vuelven a la fase de planeación. Se comparan contra el mensaje en minúsculas.
@@ -48,20 +35,11 @@ audit_allow = true
 
 
 [classifier]
-# Clasificador para el caso intermedio: todo lo que las reglas estáticas no resuelven,
-# donde "peligroso" depende de la intención. Se consulta en AMBOS modos; la fase (plan o
-# auto) viaja como contexto de su juicio, no como excusa para prescindir de él.
-#
-# El veredicto es binario, allow o deny, igual que en el auto mode de Claude Code. El
-# tercer veredicto, `ask`, se retiró: se midió que bajo --dangerously-skip-permissions
-# —la forma normal de trabajar— agy respeta el deny del hook pero ejecuta su ask, de modo
-# que preguntar en sesión desatendida equivale a aprobar sin que nadie lo revise. Una
-# denegación no es un final: el agente recibe el motivo y busca otra vía.
+# Juez para lo que las reglas no resuelven, en ambos modos. Veredicto binario: allow o deny
+# (ver FINDINGS.md sobre por qué no existe `ask`).
 enabled = true
 
-# Qué hacer cuando el clasificador no puede pronunciarse: binario ausente, timeout,
-# salida ilegible. Estas denegaciones se marcan como técnicas y no cuentan para el
-# cortacircuitos, porque un fallo de agy no es el agente insistiendo.
+# Si el juez no puede pronunciarse (timeout, salida ilegible): deniega, sin contar para el cortacircuitos.
 on_failure = "deny"
 
 # El clasificador lanza el propio `agy` en modo print, con la sesión ya autenticada de la
@@ -72,14 +50,11 @@ model = "gemini-3.8-flash-low"
 timeout_seconds = 30
 binary = "agy"
 
-# Juez de repuesto (judge_pool.py): cada conversación tiene un auxiliar que mantiene un agy
-# ya arrancado, para que el juicio no pague el arranque (~7 s en frío, ~2,5 s con repuesto).
-# Si el auxiliar no responde, se juzga en frío como siempre.
+# Juez de repuesto (judge_pool.py): un agy ya arrancado por conversación; si falla, se juzga en frío.
 persistent = true
-# Consultas que atiende cada juez antes de descartarse. Con 1, cada juicio empieza de cero:
-# un juez reutilizado recuerda lo que el agente le hizo leer en consultas anteriores.
+# Consultas por juez antes de descartarlo. Con 1, ningún juicio recuerda los anteriores.
 reuse_turns = 1
-# El auxiliar se apaga tras este tiempo sin acciones; cada acción juzgada reinicia el plazo.
+# El auxiliar se apaga tras este tiempo sin acciones juzgadas.
 idle_seconds = 900
 
 # Dónde deja agy el plan aprobado. Ese documento es la definición operativa de
@@ -90,27 +65,18 @@ plan_max_chars = 4000
 
 
 [checkpoint]
-# Captura del estado del proyecto antes del primer cambio destructivo de cada bloque.
-# Es lo que vuelve cierta la frase "reversible por control de versiones": sin respaldo,
-# esa afirmación es una suposición.
-#
-# Usa un índice temporal, así que no toca el índice, el stash ni la rama de la persona.
-# El commit queda sin padre, apuntado por refs/automode/<conversacion>, fuera del
-# historial de trabajo. Respeta .gitignore.
+# Captura git del proyecto antes del primer cambio de cada bloque de trabajo, en
+# refs/automode/<conversación>, sin tocar la rama ni el índice. Respeta .gitignore.
 enabled = true
 
-# Si no se puede respaldar (el proyecto no es un repositorio git, git no está, falla la
-# escritura), `true` devuelve la decisión a la persona en vez de aprobar a ciegas.
-# Ponerlo en `false` acepta trabajar sin red de seguridad.
+# Sin captura posible (p. ej. sin repositorio git), `true` deniega la edición; `false` la permite.
 require = true
 
 # No se recaptura dentro de este intervalo: el objetivo es poder volver al inicio del
 # bloque de trabajo, no versionar cada paso.
 min_interval_seconds = 300
 
-# Archivos más grandes que esto quedan fuera de la captura: leerlos y comprimirlos es lo
-# que la vuelve lenta en proyectos con datos. El motivo de la aprobación los nombra, y la
-# orden de restauración los excluye para no pisarlos. 0 captura todo.
+# Archivos más grandes que esto quedan fuera de la captura y el motivo los nombra. 0 captura todo.
 max_file_mb = 10
 
 # Capturas que se conservan: las de las últimas N conversaciones. Sin límite, cada
@@ -119,9 +85,7 @@ keep_last = 20
 
 
 [circuit_breaker]
-# Si el agente insiste en caminos prohibidos, algo va mal: la denegación se mantiene y se
-# le pide que cambie de enfoque. No se escala con `force_ask`: sin supervisión agy lo
-# ejecuta igual que un `ask`.
+# Si el agente insiste en caminos prohibidos, se mantiene la denegación y se le pide parar.
 consecutive_denials = 3
 total_denials = 20
 
@@ -155,9 +119,7 @@ always_evaluate = [
   "run_command", "send_command_input", "shell_exec", "execute_notebook",
   "run_extension_code", "git_commit", "delete_directory", "move",
   "invoke_subagent", "browser_subagent", "execute_browser_javascript",
-  # Observadas en el corpus de la Fase 0 y extraídas del binario: la familia de
-  # subagentes y el canal por el que un subagente le habla a otro agente. `send_message`
-  # es salida de información, de modo que se juzga contra el objetivo del trabajo.
+  # Subagentes y mensajes entre agentes: salida de información, se juzga contra la tarea.
   "manage_subagents", "define_subagent", "send_message",
   "open_browser_url", "read_url_content", "search_web", "mcp_tool",
   "cloud_sql_execute_sql", "cloud_sql_update_schema", "set_up_cloud_sql",
@@ -165,30 +127,18 @@ always_evaluate = [
   "install_applet_dependencies", "install_applet_package",
 ]
 
-# Herramientas cuyos argumentos contienen comandos de shell, y el nombre del argumento
-# donde vive el comando. `run_command` -> `CommandLine` está confirmado; el resto se
-# descubre leyendo el registro de auditoría.
-# Herramientas que borran o mueven: aunque el clasificador las apruebe, antes se
-# respalda el proyecto. Son las que no se pueden deshacer con un editor.
+# Herramientas que borran o mueven: aunque el juez las apruebe, antes se captura el proyecto.
 destructive = [
   "delete_directory", "move", "delete_file", "remove_file",
 ]
 
-# Claves cuyo valor es CONTENIDO, no una ruta ni un comando: el texto que se va a
-# escribir dentro de un archivo, la instrucción para el editor, el mensaje a otro
-# agente. Se excluyen del rastreo de rutas y de credenciales.
-#
-# Sin esto, escribir un `README.md` que en su texto menciona `pruebas/banco` se leía
-# como "escritura fuera del proyecto" y volvía a la persona (observado dos veces en el
-# corpus de la Fase 0, sesión 4a2cd8ee). El contenido no se ejecuta ni se abre: tratarlo
-# como ruta solo produce fricción.
-#
-# Los nombres salen del registro de auditoría real de agy, no de conjeturas.
+# Claves cuyo valor es contenido (texto a escribir, mensajes), no rutas: no se rastrean.
 content_args = [
   "CodeContent", "ReplacementContent", "TargetContent", "Instruction",
   "Description", "Message", "ArtifactMetadata", "toolAction", "toolSummary",
 ]
 
+# Herramientas que ejecutan comandos de shell y el argumento donde viene el comando.
 [tools.command_arg]
 run_command = "CommandLine"
 shell_exec = "CommandLine"
@@ -224,17 +174,13 @@ self_protected = [
   '(?:^|[\s/\\])\.gemini[/\\]automode(?:[/\\]|$)',
 ]
 
-# Términos que delatan una búsqueda de credenciales. Se comprueban en los argumentos
-# de las herramientas de lectura y búsqueda: la regla equivalente de [commands] solo
-# cubría comandos de shell, de modo que un `grep_search` los esquivaba.
+# Términos que delatan una búsqueda de credenciales en las herramientas de lectura y búsqueda.
 credential_terms = [
   '\b(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_?KEY|CREDENTIAL)S?\b',
 ]
 
-# Raíces de escritura adicionales al workspace. agy guarda sus artefactos de planeación
-# en su propio directorio `brain/`, fuera del proyecto: sin esto, cada plan que escribe
-# pide permiso. Se expanden variables de entorno y `~`.
-# Mantener corta: cada entrada es un lugar donde el agente puede escribir sin preguntar.
+# Dónde más puede escribir el agente sin juez: `brain/`, donde agy guarda sus planes.
+# Mantener corta: cada entrada es un lugar sin revisión.
 extra_write_roots = [
   '~/.gemini/antigravity-cli/brain',
 ]
@@ -245,19 +191,15 @@ extra_write_roots = [
 # ─────────────────────────────────────────────────────────────────────────────
 # Análisis de comandos de shell
 #
-# El comando se descompone primero en segmentos por &&, ||, ;, | y saltos de línea.
-# Si CUALQUIER segmento coincide con un patrón bloqueado, todo el comando se deniega.
-# Solo si TODOS los segmentos coinciden con un patrón seguro, el comando se aprueba.
-# Cualquier otro caso -> `ask`.
+# El comando se parte en segmentos (&&, ||, ;, |). Si alguno está bloqueado, se deniega;
+# si todos son seguros, se aprueba; si no, lo juzga el clasificador.
 # ─────────────────────────────────────────────────────────────────────────────
 
 [commands]
 # Comandos inequívocamente seguros. Coinciden desde el inicio del segmento.
 safe = [
   '(?:ls|dir|pwd|cd|echo|cat|type|head|tail|wc|which|where|whoami|date)\b',
-  # Lecturas de PowerShell, con sus alias. Eran la consulta al juez más frecuente del
-  # registro (Get-ChildItem, Test-Path): solo leen, y dentro del proyecto no hay nada
-  # que juzgar. Fuera del proyecto, o con código incrustado, siguen yendo al juez.
+  # Lecturas de PowerShell con sus alias; fuera del proyecto o con código incrustado, al juez.
   '(?:Get-ChildItem|gci|Get-Content|gc|Test-Path|Get-Location|gl|Resolve-Path|rvpa|Get-Item|gi|Split-Path|Join-Path)\b',
   # Cmdlets que solo dan forma a una salida dentro de una tubería (Get-ChildItem | ...).
   # Where-Object y ForEach-Object no están: su bloque de script ejecuta código.
@@ -267,10 +209,7 @@ safe = [
   '(?:grep|findstr|Select-String|sls)\b',
   'rg\b(?![^|;&]*--pre)',
   '(?:git)\s+(?:status|log|diff|show|branch|remote|fetch|stash\s+list|rev-parse|describe|blame)\b',
-  # `git init` es la salida que el motor le indica al agente cuando no hay repositorio y
-  # por tanto no hay respaldo posible. Sin esto, ese consejo sería un callejón sin salida:
-  # el agente intentaría crearlo y volvería a chocar. Crear un repositorio vacío no
-  # destruye nada ni toca el historial de otro.
+  # `git init` es lo que el motor le pide al agente cuando no hay repositorio.
   '(?:git)\s+init\b',
   '(?:python|python3|py)\s+-m\s+(?:pytest|unittest)\b',
   '(?:pytest|tox|nox)\b',
@@ -334,9 +273,7 @@ pattern = '>>?\s*[^|;&]*authorized_keys|ssh-copy-id\b'
 reason = "Añade acceso SSH persistente."
 
 [[commands.blocked]]
-# `at` solo cuenta como comando: al inicio de un segmento y seguido de una hora o un equipo
-# (`at 14:00 ...`, `at \\pc ...`). Sin esa exigencia, "# Look at lines" o "Event at index"
-# dentro de un `python -c` se leían como tareas programadas (conversación 68da1f0a, s36).
+# `at` solo como comando: al inicio de un segmento y seguido de una hora o un equipo.
 pattern = '\b(?:crontab|schtasks)\b|(?:^|[;&|\n"\x27(]\s*)at\s+(?:\d|\\\\)|New-ScheduledTask'
 reason = "Crea ejecución programada persistente."
 

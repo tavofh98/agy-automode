@@ -31,11 +31,7 @@ def _firma(token: str, nonce: str, texto: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def ask(conversation: str, prompt: str, model: str, timeout: float) -> dict | None:
-    """Consulta al juez de la conversación. Devuelve la envoltura de agy o None.
-
-    None significa "juzga en frío": sin conversación, servidor ausente, caído, lento o no
-    autenticado.
-    """
+    """Consulta al juez de la conversación. None si no hay uno que responda: se juzga en frío."""
     if not conversation:
         return None
     try:
@@ -81,15 +77,13 @@ def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds:
         candado.write_text(str(os.getpid()), encoding="utf-8")
         cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "serve",
                conversation, model, str(reuse_turns), str(idle_seconds)]
-        # Carpeta propia: heredar la del hook dejaría el proyecto bloqueado (en Windows no
-        # se puede borrar ni renombrar una carpeta que un proceso vivo usa como cwd).
+        # Carpeta propia: con la del hook, Windows no deja borrar ni renombrar el proyecto.
         opciones = {"cwd": str(carpeta), "stdin": subprocess.DEVNULL,
                     "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                     "close_fds": True}
         if os.name == "nt":
             base = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-            # agy puede agrupar el hook en un job que se cierra con él: se intenta salir
-            # del job para que el auxiliar sobreviva a la llamada que lo lanzó.
+            # Salir del job de agy para que el auxiliar sobreviva a la llamada que lo lanzó.
             try:
                 subprocess.Popen(cmd, creationflags=base | 0x01000000, **opciones)
             except OSError:
