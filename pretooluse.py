@@ -9,8 +9,9 @@ Contrato (documentado dentro del binario de agy):
     stdout -> {"decision": "allow"|"ask"|"deny"|"force_ask", "reason": "..."}
 
 Principio rector: este script **nunca falla hacia `allow`**. Cualquier excepción,
-entrada malformada o regla ausente degrada a `ask`, devolviendo la decisión a la
-persona. `stdout` transporta únicamente el JSON de decisión; todo diagnóstico va al
+entrada malformada o política ilegible degrada a `deny`: con --dangerously-skip-permissions
+agy ejecuta un `ask` sin preguntar, así que devolver la decisión a la persona equivaldría
+a aprobar sin revisión. `stdout` transporta únicamente el JSON de decisión; todo diagnóstico va al
 registro de auditoría.
 """
 import json
@@ -19,8 +20,17 @@ import pathlib
 import re
 import sys
 import tempfile
-import tomllib
 from datetime import datetime
+
+try:
+    import tomllib
+except ImportError:
+    # Python 3.10 o anterior: sin tomllib no se puede leer la política. Se deniega con un
+    # motivo claro en vez de caer con un traceback que el agente no sabría interpretar.
+    print(json.dumps({"decision": "deny", "reason": (
+        "automode necesita Python 3.11 o superior y este es "
+        f"{sys.version.split()[0]}. Pide al usuario que actualice Python.")}))
+    sys.exit(0)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -742,13 +752,13 @@ def main() -> int:
         raw = sys.stdin.buffer.read().decode("utf-8-sig", errors="replace")
         payload = json.loads(raw) if raw.strip() else {}
     except (ValueError, OSError) as exc:
-        respond("ask", f"El auto mode no pudo leer la llamada ({exc}). Decide tú.")
+        respond("deny", f"El auto mode no pudo leer la llamada ({exc}). Pide al usuario que lo revise.")
         return 0
 
     try:
         policy = load_policy()
     except (OSError, ValueError) as exc:
-        respond("ask", f"Política ilegible ({exc}). Decide tú.")
+        respond("deny", f"Política ilegible ({exc}). Pide al usuario que revise policy.toml.")
         audit({"ts": datetime.now().isoformat(timespec="seconds"),
                "error": f"policy: {exc}"})
         return 0
@@ -758,7 +768,7 @@ def main() -> int:
     try:
         decision, reason, rule = decide(payload, policy)
     except Exception as exc:  # el hook nunca puede tumbar la sesión
-        respond("ask", f"Error interno del auto mode ({exc}). Decide tú.")
+        respond("deny", f"Error interno del auto mode ({exc}). Pide al usuario que lo revise.")
         audit({"ts": datetime.now().isoformat(timespec="seconds"),
                "error": f"decide: {exc}"})
         return 0

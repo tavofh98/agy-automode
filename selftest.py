@@ -259,6 +259,13 @@ def test_backend_agy() -> list[str]:
     if got != "deny":
         failures.append(f"guardia anti-recursión: esperaba deny, obtuvo {got}")
 
+    # 5. Una llamada ilegible se deniega: un `ask` lo ejecutaría agy sin preguntar.
+    r = subprocess.run([sys.executable, str(HOOK)], input="{no es json", capture_output=True,
+                       text=True, encoding="utf-8", env={**os.environ, "AGY_AUTOMODE_BACKEND": "none"})
+    got = json.loads(r.stdout or "{}").get("decision")
+    if got != "deny":
+        failures.append(f"llamada ilegible: esperaba deny, obtuvo {got}")
+
     return failures
 
 

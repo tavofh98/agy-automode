@@ -80,8 +80,8 @@ agy --dangerously-skip-permissions
 
 Sin esa opción el auto mode decide igual, pero agy te sigue pidiendo confirmación aunque el
 hook apruebe la acción. Con ella, agy respeta las denegaciones del hook y deja de preguntar.
-Si el propio hook falla (política ilegible, llamada que no puede leer), la acción se ejecuta
-sin revisión.
+Si el propio hook falla (política ilegible, llamada que no puede leer, Python ausente o
+anterior a 3.11), la acción se deniega y el motivo dice qué revisar.
 
 **Atajo `agya`.** Para no escribir la opción cada vez, define un atajo que acepta los mismos
 argumentos que `agy` (por ejemplo, `agya -c`).
