@@ -174,7 +174,7 @@ class Juez:
 
 
 class Pool:
-    """Los jueces de una conversación: uno de repuesto esperando, uno por acción."""
+    """Los jueces de una conversación: uno precargado esperando, uno por acción."""
 
     def __init__(self, model: str, reuse_turns: int):
         self.model, self.reuse_turns = model, max(1, reuse_turns)
@@ -234,7 +234,7 @@ def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) ->
             pool.devolver(juez)
             if envoltura is None:
                 envoltura = {"status": "ERROR", "response": "",
-                             "error": "el juez de repuesto no respondió"}
+                             "error": "el juez precargado no respondió"}
             texto = json.dumps(envoltura, sort_keys=True, ensure_ascii=False)
             salida = {"envelope": envoltura, "mac": _firma(token, str(pet.get("nonce", "")), texto)}
             self.wfile.write((json.dumps(salida, ensure_ascii=False) + "\n").encode("utf-8"))

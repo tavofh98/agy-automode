@@ -227,7 +227,7 @@ def test_backend_agy() -> list[str]:
     if got != "deny":
         failures.append(f"guardia anti-recursión: esperaba deny, obtuvo {got}")
 
-    # 4b. Juez de repuesto: un servidor que no conoce el secreto no puede colar un veredicto.
+    # 4b. Juez precargado: un servidor que no conoce el secreto no puede colar un veredicto.
     import judge_pool
     import socketserver
     import threading
@@ -249,7 +249,7 @@ def test_backend_agy() -> list[str]:
             {"port": srv.server_address[1], "token": "robado"}), encoding="utf-8")
         try:
             if judge_pool.ask("conv", "¿permitir?", "modelo", 5) is not None:
-                failures.append("juez de repuesto: aceptó un veredicto sin firma válida")
+                failures.append("juez precargado: aceptó un veredicto sin firma válida")
         finally:
             judge_pool.STATE_ROOT = original
 

@@ -270,7 +270,7 @@ def classify_with_agy(
 
     prompt = build_prompt(user_intent, tool_name, tool_args, context)
     envelope = None
-    # Sin juez de repuesto listo, se arranca para la próxima y esta se juzga en frío.
+    # Sin juez precargado listo, se arranca para la próxima y esta se juzga en frío.
     if cfg.get("persistent", False):
         envelope = judge_pool.ask(conversation_id, prompt, model, timeout)
         if envelope is None:

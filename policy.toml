@@ -50,7 +50,7 @@ model = "gemini-3.8-flash-low"
 timeout_seconds = 30
 binary = "agy"
 
-# Juez de repuesto (judge_pool.py): un agy ya arrancado por conversación; si falla, se juzga en frío.
+# Juez precargado (judge_pool.py): un agy ya arrancado por conversación; si falla, se juzga en frío.
 persistent = true
 # Consultas por juez antes de descartarlo. Con 1, ningún juicio recuerda los anteriores.
 reuse_turns = 1
@@ -158,7 +158,7 @@ sensitive = [
   '(^|[/\\])credentials\.json$',
   '(^|[/\\])google_accounts\.json$',
   '(^|[/\\])\.git-credentials$',
-  # Secreto del juez de repuesto: quien lo lea podría firmar veredictos falsos.
+  # Secreto del juez precargado: quien lo lea podría firmar veredictos falsos.
   '(^|[/\\])\.gemini[/\\]automode([/\\]|$)',
 ]
 
@@ -170,7 +170,7 @@ self_protected = [
   '(?:^|[\s/\\])\.agents(?:[/\\]|$)',
   # Instalación global del auto mode (y del resto de la configuración global de agy).
   '(?:^|[\s/\\])\.gemini[/\\]config(?:[/\\]|$)',
-  # Estado del juez de repuesto, con el secreto que autentica sus veredictos.
+  # Estado del juez precargado, con el secreto que autentica sus veredictos.
   '(?:^|[\s/\\])\.gemini[/\\]automode(?:[/\\]|$)',
 ]
 

@@ -16,8 +16,8 @@ Lo que no es código pero explica por qué el código es así.
 - Solo ve la intención del usuario, el plan aprobado y la acción: nunca el razonamiento del agente, que es la defensa contra la persuasión.
 - `--json-schema` no fuerza el formato en modo print: el JSON se sostiene con un prompt estricto y un extractor tolerante. Ante cualquier duda, `deny` marcado como fallo técnico, que no cuenta para el cortacircuitos.
 - Recursión: el agy anidado corre con `AGY_AUTOMODE_INFLIGHT=1` y en un directorio temporal fuera de todo workspace. Hacen falta las dos defensas, porque agy también carga un `hooks.json` global de `~/.gemini/config/`.
-- El juez corre como agente propio sin herramientas (`--agent automode-juez`, definido en `.agents/agents/` de su carpeta temporal). Sin él, agy añade su prompt de sistema y sus herramientas: ~12.100 tokens por consulta frente a ~2.100, con los mismos veredictos. Hay que escribir `tools: []`: sin el campo, agy carga herramientas por defecto (~5.500).
-- Latencia en Windows: ~4 s de arranque del binario y ~2 s de modelo. `gemini-3.8-flash-low` ya no gasta tokens de razonamiento, así que un juez en dos etapas no ahorra nada; lo que cuenta es el arranque.
+- El juez corre como agente propio sin herramientas (`--agent automode-juez`, definido en `.agents/agents/` de su carpeta temporal). Sin él, agy añade su prompt de sistema y sus herramientas: ~12.700 tokens por consulta frente a ~2.700, con los mismos veredictos. Hay que escribir `tools: []`: sin el campo, agy carga herramientas por defecto (~5.500).
+- Latencia en Windows: ~4 s de arranque del binario y ~2 s de modelo. Lo que cuenta es el arranque, no el tamaño del prompt: con el agente propio, la mediana del juez en frío solo baja de 6,6 a 5,5 s.
 
 ## Capturas git
 
@@ -32,9 +32,9 @@ Lo que no es código pero explica por qué el código es así.
 - Cuando hay un plan aprobado en `brain/<conversationId>/`, ese plan es la vara del trabajo, no los últimos mensajes sueltos.
 - El payload del hook no dice en qué modo está agy, y el tipo de paso `PLANNER_RESPONSE` aparece incluso sin `/plan`: la fase se deduce del último `/plan` o frase de aprobación que escribió la persona.
 
-## Juez de repuesto
+## Juez precargado
 
-- Cada acción la juzga un agy nuevo, ya arrancado, que se descarta al responder: ningún juicio ve los anteriores. Latencia ~2,5–3,9 s frente a ~7 s en frío.
+- Cada acción la juzga un agy nuevo, ya arrancado, que se descarta al responder: ningún juicio ve los anteriores. Latencia mediana ~2,3 s frente a ~5,5 s en frío.
 - El formato de entrada de `agy --input-format stream-json` no está documentado: `{"event": "user", "message": {"content": "..."}}`, con `--print=` vacío y `--output-format stream-json`. `/clear` no existe en modo print, así que no hay forma de vaciar la memoria de un agy vivo.
 - Un auxiliar por conversación, nunca compartido: la misma acción puede ser válida en una conversación y no en otra (`python simulador.py` se aprueba en la del simulador y se deniega en la de los correos).
 - Canal: solo `127.0.0.1`, secreto por conversación en `~/.gemini/automode/<conversación>/` y respuestas firmadas con HMAC. Si el auxiliar falla, la acción se juzga en frío.

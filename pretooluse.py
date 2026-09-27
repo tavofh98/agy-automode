@@ -68,7 +68,7 @@ POLICY_FILE = HERE / "policy.toml"
 # Estado de la conversación en curso. `main()` lo fija con `state_dir_for` antes de
 # decidir; este valor solo rige si la llamada no pudo leerse.
 STATE_DIR = pathlib.Path(tempfile.gettempdir()) / "automode_sin_conversacion"
-# Conversación en curso: cada una tiene su propio juez de repuesto.
+# Conversación en curso: cada una tiene su propio juez precargado.
 CONVERSATION_ID = ""
 
 # Separadores de shell que encadenan acciones independientes.
