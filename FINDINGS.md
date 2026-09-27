@@ -16,6 +16,7 @@ Lo que no es código pero explica por qué el código es así.
 - Solo ve la intención del usuario, el plan aprobado y la acción: nunca el razonamiento del agente, que es la defensa contra la persuasión.
 - `--json-schema` no fuerza el formato en modo print: el JSON se sostiene con un prompt estricto y un extractor tolerante. Ante cualquier duda, `deny` marcado como fallo técnico, que no cuenta para el cortacircuitos.
 - Recursión: el agy anidado corre con `AGY_AUTOMODE_INFLIGHT=1` y en un directorio temporal fuera de todo workspace. Hacen falta las dos defensas, porque agy también carga un `hooks.json` global de `~/.gemini/config/`.
+- El juez corre como agente propio sin herramientas (`--agent automode-juez`, definido en `.agents/agents/` de su carpeta temporal). Sin él, agy añade su prompt de sistema y sus herramientas: ~12.100 tokens por consulta frente a ~2.100, con los mismos veredictos. Hay que escribir `tools: []`: sin el campo, agy carga herramientas por defecto (~5.500).
 - Latencia en Windows: ~4 s de arranque del binario y ~2 s de modelo. `gemini-3.8-flash-low` ya no gasta tokens de razonamiento, así que un juez en dos etapas no ahorra nada; lo que cuenta es el arranque.
 
 ## Capturas git

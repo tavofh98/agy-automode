@@ -207,7 +207,7 @@ def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
     try:
         with tempfile.TemporaryDirectory(prefix="automode_agy_") as sandbox:
             proc = subprocess.run(
-                cmd,
+                cmd + judge_pool.write_agent(sandbox),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

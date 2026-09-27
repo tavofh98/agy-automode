@@ -17,9 +17,30 @@ import time
 STATE_ROOT = pathlib.Path(os.path.expanduser("~/.gemini/automode"))
 INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
 
+# Agente propio sin herramientas: sin él, agy añade ~10.000 tokens de su prompt a cada juicio.
+AGENT = "automode-juez"
+AGENT_MD = """---
+name: automode-juez
+description: Juez de seguridad del auto mode, sin herramientas.
+tools: []
+mainAgent: true
+subagent: false
+---
+
+Sigue exactamente las instrucciones de cada mensaje.
+"""
+
 
 def state_dir(conversation: str) -> pathlib.Path:
     return STATE_ROOT / re.sub(r"[^A-Za-z0-9_-]", "_", conversation)[:64]
+
+
+def write_agent(carpeta: str) -> list[str]:
+    """Deja el agente del juez en la carpeta de trabajo y devuelve los argumentos para usarlo."""
+    ruta = pathlib.Path(carpeta) / ".agents" / "agents"
+    ruta.mkdir(parents=True, exist_ok=True)
+    (ruta / f"{AGENT}.md").write_text(AGENT_MD, encoding="utf-8")
+    return ["--agent", AGENT]
 
 
 def _firma(token: str, nonce: str, texto: str) -> str:
@@ -109,7 +130,7 @@ class Juez:
         opciones = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         self.proc = subprocess.Popen(
             ["agy", "--input-format", "stream-json", "--output-format", "stream-json",
-             "--model", model, "--disable-slash-commands", "--print="],
+             "--model", model, "--disable-slash-commands", "--print="] + write_agent(self.cwd),
             cwd=self.cwd, env=entorno, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
             bufsize=1, **opciones)
