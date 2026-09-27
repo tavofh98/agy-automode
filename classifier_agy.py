@@ -8,6 +8,11 @@ import subprocess
 import tempfile
 from datetime import datetime
 
+try:
+    import judge_pool
+except ImportError:
+    from automode import judge_pool
+
 # Encabeza el motivo cuando el juez no pudo pronunciarse: no cuenta para el cortacircuitos.
 TECHNICAL_MARK = "[sin veredicto]"
 
@@ -185,33 +190,15 @@ def extract_decision(text: str) -> tuple[str, str] | None:
     return None
 
 
-def classify_with_agy(
-    user_intent: str,
-    tool_name: str,
-    tool_args: dict,
-    policy: dict,
-    state_dir: pathlib.Path,
-    root_dir: pathlib.Path | None = None,
-    context: dict | None = None,
-) -> tuple[str, str]:
-    """Juzga la acción con `agy --print`. Ante cualquier fallo devuelve `deny`."""
-    cfg = policy.get("classifier", {}).get("agy", {})
-    binary = cfg.get("binary", "agy")
-    model = cfg.get("model", "gemini-3.8-flash-low")
-    timeout = float(cfg.get("timeout_seconds", 30))
-
-    cache = DecisionCache(state_dir / "decision_cache.json")
-    cached = cache.get(user_intent, tool_name, tool_args, context)
-    if cached:
-        return cached
-
+def _cold_envelope(binary: str, prompt: str, model: str, timeout: float):
+    """Juzga lanzando un `agy --print` nuevo. Devuelve la envoltura o ("deny", motivo)."""
     # El agy anidado corre en un directorio vacío, sin workspace ni hooks.
     env = dict(os.environ)
     env[INFLIGHT_VAR] = "1"
 
     cmd = [
         resolve_binary(binary),
-        "--print", build_prompt(user_intent, tool_name, tool_args, context),
+        "--print", prompt,
         "--output-format", "json",
         "--model", model,
         "--print-timeout", f"{int(timeout)}s",
@@ -220,7 +207,7 @@ def classify_with_agy(
     try:
         with tempfile.TemporaryDirectory(prefix="automode_agy_") as sandbox:
             proc = subprocess.run(
-                cmd,
+                cmd + judge_pool.write_agent(sandbox),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -256,6 +243,43 @@ def classify_with_agy(
 
     if not isinstance(envelope, dict):
         return "deny", f"{TECHNICAL_MARK} Salida de agy no interpretable: sin veredicto, no se ejecuta."
+
+    return envelope
+
+
+def classify_with_agy(
+    user_intent: str,
+    tool_name: str,
+    tool_args: dict,
+    policy: dict,
+    state_dir: pathlib.Path,
+    root_dir: pathlib.Path | None = None,
+    context: dict | None = None,
+    conversation_id: str = "",
+) -> tuple[str, str]:
+    """Juzga la acción con `agy --print`. Ante cualquier fallo devuelve `deny`."""
+    cfg = policy.get("classifier", {}).get("agy", {})
+    binary = cfg.get("binary", "agy")
+    model = cfg.get("model", "gemini-3.8-flash-low")
+    timeout = float(cfg.get("timeout_seconds", 30))
+
+    cache = DecisionCache(state_dir / "decision_cache.json")
+    cached = cache.get(user_intent, tool_name, tool_args, context)
+    if cached:
+        return cached
+
+    prompt = build_prompt(user_intent, tool_name, tool_args, context)
+    envelope = None
+    # Sin juez precargado listo, se arranca para la próxima y esta se juzga en frío.
+    if cfg.get("persistent", False):
+        envelope = judge_pool.ask(conversation_id, prompt, model, timeout)
+        if envelope is None:
+            judge_pool.ensure_server(conversation_id, model, int(cfg.get("reuse_turns", 1)),
+                                     int(cfg.get("idle_seconds", 900)))
+    if envelope is None:
+        envelope = _cold_envelope(binary, prompt, model, timeout)
+        if isinstance(envelope, tuple):
+            return envelope
 
     status = str(envelope.get("status", "")).upper()
     if status and status != "SUCCESS":

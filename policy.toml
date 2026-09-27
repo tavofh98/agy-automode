@@ -50,6 +50,13 @@ model = "gemini-3.8-flash-low"
 timeout_seconds = 30
 binary = "agy"
 
+# Juez precargado (judge_pool.py): un agy ya arrancado por conversación; si falla, se juzga en frío.
+persistent = true
+# Consultas por juez antes de descartarlo. Con 1, ningún juicio recuerda los anteriores.
+reuse_turns = 1
+# El auxiliar se apaga tras este tiempo sin acciones juzgadas.
+idle_seconds = 900
+
 # Dónde deja agy el plan aprobado. Ese documento es la definición operativa de
 # "dentro de los objetivos del trabajo" contra la que el clasificador juzga.
 plan_root = "~/.gemini/antigravity-cli/brain"
@@ -151,6 +158,8 @@ sensitive = [
   '(^|[/\\])credentials\.json$',
   '(^|[/\\])google_accounts\.json$',
   '(^|[/\\])\.git-credentials$',
+  # Secreto del juez precargado: quien lo lea podría firmar veredictos falsos.
+  '(^|[/\\])\.gemini[/\\]automode([/\\]|$)',
 ]
 
 # Auto-protección: el auto mode no puede modificarse a sí mismo. Un guardián editable no
@@ -161,6 +170,8 @@ self_protected = [
   '(?:^|[\s/\\])\.agents(?:[/\\]|$)',
   # Instalación global del auto mode (y del resto de la configuración global de agy).
   '(?:^|[\s/\\])\.gemini[/\\]config(?:[/\\]|$)',
+  # Estado del juez precargado, con el secreto que autentica sus veredictos.
+  '(?:^|[\s/\\])\.gemini[/\\]automode(?:[/\\]|$)',
 ]
 
 # Términos que delatan una búsqueda de credenciales en las herramientas de lectura y búsqueda.

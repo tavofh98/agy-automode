@@ -10,6 +10,10 @@ llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
 - **agy como juez de los casos dudosos.** Lo que las reglas no resuelven se consulta a
   `agy --print` con tu plan y tus últimos mensajes delante. Sin claves ni configuración
   aparte: usa la sesión de agy ya autenticada.
+- **Juez precargado.** Cada conversación tiene un auxiliar (`judge_pool.py`) con un agy ya
+  arrancado: cada acción juzgada tarda ~2,5 s en vez de ~6, sin memoria de las anteriores.
+  El juez corre como agente sin herramientas, así que cada consulta lee ~2.700 tokens en
+  vez de ~12.700. Se apaga tras 15 minutos sin acciones; si no responde, se juzga en frío.
 - **Fase de planeación.** Tras escribir `/plan`, las ediciones de código pasan por el juez,
   que las deniega hasta que apruebes. Una frase de aprobación (ver más abajo) abre la fase de
   ejecución.
