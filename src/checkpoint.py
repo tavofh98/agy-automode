@@ -160,17 +160,6 @@ def create_checkpoint(root: pathlib.Path, conversation_id: str,
             pass
 
 
-def _same_project(previous: dict, root: pathlib.Path) -> bool:
-    """¿La captura registrada se hizo sobre este mismo directorio?"""
-    previous_root = previous.get("root")
-    if not previous_root:
-        return False
-    try:
-        return pathlib.Path(os.path.realpath(previous_root)) == pathlib.Path(os.path.realpath(root))
-    except (OSError, ValueError):
-        return False
-
-
 def ensure_checkpoint(
     root: pathlib.Path,
     conversation_id: str,
@@ -185,8 +174,8 @@ def ensure_checkpoint(
     previous = registry.get(conversation_id or "no_id")
     now = datetime.now()
 
-    # Una captura previa solo vale si es de este proyecto y su referencia sigue existiendo.
-    if previous and _same_project(previous, root) and ref_exists(root, previous.get("ref", "")):
+    # Una captura previa solo vale si su referencia existe en este proyecto.
+    if previous and ref_exists(root, previous.get("ref", "")):
         try:
             elapsed = (now - datetime.fromisoformat(previous["ts"])).total_seconds()
             if elapsed < min_interval_seconds:
@@ -203,7 +192,6 @@ def ensure_checkpoint(
         "sha": detail,
         "ts": now.isoformat(timespec="seconds"),
         "ref": _safe_ref(conversation_id),
-        "root": str(root),
         "skipped": skipped,
     }
     _write_registry(state_dir, registry)

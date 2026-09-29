@@ -1,5 +1,3 @@
-import hashlib
-import hmac
 import json
 import os
 import pathlib
@@ -43,28 +41,27 @@ def write_agent(folder: str) -> list[str]:
     return ["--agent", AGENT]
 
 
-def _sign(token: str, nonce: str, text: str) -> str:
-    return hmac.new(token.encode(), (nonce + text).encode("utf-8"), hashlib.sha256).hexdigest()
+def resolve_binary() -> str:
+    """Ruta de agy: el PATH del hook no siempre incluye `%LOCALAPPDATA%\\agy\\bin`."""
+    found = shutil.which("agy")
+    if found:
+        return found
+    candidate = pathlib.Path(os.environ.get("LOCALAPPDATA", "")) / "agy" / "bin" / "agy.exe"
+    return str(candidate) if candidate.is_file() else "agy"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cliente (lo usa el hook)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def ask(conversation: str, prompt: str, model: str, timeout: float) -> dict | None:
+def ask(conversation: str, prompt: str, timeout: float) -> dict | None:
     """Consulta al juez de la conversación. None si no hay uno que responda: se juzga en frío."""
     if not conversation:
         return None
     try:
         state = json.loads((state_dir(conversation) / "judge.json").read_text(encoding="utf-8"))
-        token, port = state["token"], int(state["port"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    nonce = secrets.token_hex(16)
-    request = {"token": token, "nonce": nonce, "model": model, "prompt": prompt,
-                "timeout": timeout}
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0) as sock:
+        request = {"token": state["token"], "prompt": prompt, "timeout": timeout}
+        with socket.create_connection(("127.0.0.1", int(state["port"])), timeout=1.0) as sock:
             sock.settimeout(timeout + 5)
             sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
             data = b""
@@ -73,18 +70,13 @@ def ask(conversation: str, prompt: str, model: str, timeout: float) -> dict | No
                 if not chunk:
                     break
                 data += chunk
-        response = json.loads(data.decode("utf-8"))
-    except (OSError, ValueError):
+        envelope = json.loads(data.decode("utf-8")).get("envelope")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
-    envelope = response.get("envelope")
-    text = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
-    if not isinstance(envelope, dict) or not hmac.compare_digest(
-            str(response.get("mac", "")), _sign(token, nonce, text)):
-        return None
-    return envelope
+    return envelope if isinstance(envelope, dict) else None
 
 
-def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
+def ensure_server(conversation: str, model: str, idle_seconds: int) -> None:
     """Arranca el auxiliar de la conversación si no hay uno. No espera a que esté listo."""
     if not conversation:
         return
@@ -97,11 +89,11 @@ def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds:
             return
         lock_file.write_text(str(os.getpid()), encoding="utf-8")
         cmd = [sys.executable, str(pathlib.Path(__file__).resolve()), "serve",
-               conversation, model, str(reuse_turns), str(idle_seconds)]
+               conversation, model, str(idle_seconds)]
         # Carpeta propia: con la del hook, Windows no deja borrar ni renombrar el proyecto.
         options = {"cwd": str(folder), "stdin": subprocess.DEVNULL,
-                    "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-                    "close_fds": True}
+                   "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+                   "close_fds": True}
         if os.name == "nt":
             creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             # Salir del job de agy para que el auxiliar sobreviva a la llamada que lo lanzó.
@@ -120,22 +112,20 @@ def ensure_server(conversation: str, model: str, reuse_turns: int, idle_seconds:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class Judge:
-    """Un `agy` en modo stream-json, arrancado y a la espera de acciones que juzgar."""
+    """Un `agy` en modo stream-json, arrancado y a la espera de una acción que juzgar."""
 
     def __init__(self, model: str):
-        self.model = model
         env = dict(os.environ)
         env[INFLIGHT_VAR] = "1"  # sus propias herramientas las deniega el hook
         self.cwd = tempfile.mkdtemp(prefix="automode_judge_")  # fuera de todo workspace
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         self.proc = subprocess.Popen(
-            ["agy", "--input-format", "stream-json", "--output-format", "stream-json",
+            [resolve_binary(), "--input-format", "stream-json", "--output-format", "stream-json",
              "--model", model, "--disable-slash-commands", "--print="] + write_agent(self.cwd),
             cwd=self.cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace",
             bufsize=1, **options)
         self.events = []
-        self.turns = 0
         threading.Thread(target=self._read_output, daemon=True).start()
 
     def _read_output(self):
@@ -174,52 +164,42 @@ class Judge:
 
 
 class Pool:
-    """Los jueces de una conversación: uno precargado esperando, uno por acción."""
+    """El juez de repuesto de una conversación: cada acción usa uno y se arranca el siguiente."""
 
-    def __init__(self, model: str, reuse_turns: int):
-        self.model, self.reuse_turns = model, max(1, reuse_turns)
+    def __init__(self, model: str):
+        self.model = model
         self.lock = threading.Lock()
-        self.ready: list[Judge] = []
+        self.spare = Judge(model)
         self.last_used = time.time()
-        self.replenish()
+
+    def acquire(self) -> Judge:
+        with self.lock:
+            self.last_used = time.time()
+            judge, self.spare = self.spare, None
+        return judge if judge and judge.is_alive() else Judge(self.model)
+
+    def release(self, judge: Judge):
+        judge.close()
+        threading.Thread(target=self.replenish, daemon=True).start()
 
     def replenish(self):
         with self.lock:
-            self.ready = [judge for judge in self.ready if judge.is_alive()]
-            if not self.ready:
-                self.ready.append(Judge(self.model))
-
-    def acquire(self, model: str) -> Judge:
-        with self.lock:
-            self.last_used = time.time()
-            if model == self.model:
-                self.ready = [judge for judge in self.ready if judge.is_alive()]
-                if self.ready:
-                    return self.ready.pop(0)
-        return Judge(model)
-
-    def release(self, judge: Judge):
-        judge.turns += 1
-        if judge.turns < self.reuse_turns and judge.is_alive() and judge.model == self.model:
-            with self.lock:
-                self.ready.append(judge)
-        else:
-            judge.close()
-        threading.Thread(target=self.replenish, daemon=True).start()
+            if self.spare is None or not self.spare.is_alive():
+                self.spare = Judge(self.model)
 
     def close(self):
         with self.lock:
-            for judge in self.ready:
-                judge.close()
-            self.ready = []
+            if self.spare:
+                self.spare.close()
+            self.spare = None
 
 
-def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) -> None:
+def serve(conversation: str, model: str, idle_seconds: int) -> None:
     folder = state_dir(conversation)
     folder.mkdir(parents=True, exist_ok=True)
     state_file = folder / "judge.json"
     token = secrets.token_hex(32)
-    pool = Pool(model, reuse_turns)
+    pool = Pool(model)
 
     class Handler(socketserver.StreamRequestHandler):
         def handle(self):
@@ -227,25 +207,22 @@ def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) ->
                 request = json.loads(self.rfile.readline().decode("utf-8"))
             except ValueError:
                 return
-            if not hmac.compare_digest(str(request.get("token", "")), token):
+            if request.get("token") != token:
                 return
-            judge = pool.acquire(str(request.get("model") or model))
+            judge = pool.acquire()
             envelope = judge.query(str(request.get("prompt", "")), float(request.get("timeout", 30)))
             pool.release(judge)
             if envelope is None:
                 envelope = {"status": "ERROR", "response": "",
-                             "error": "el juez precargado no respondió"}
-            text = json.dumps(envelope, sort_keys=True, ensure_ascii=False)
-            payload = {"envelope": envelope, "mac": _sign(token, str(request.get("nonce", "")), text)}
-            self.wfile.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
+                            "error": "el juez precargado no respondió"}
+            self.wfile.write((json.dumps({"envelope": envelope}, ensure_ascii=False) + "\n")
+                             .encode("utf-8"))
 
     class Server(socketserver.ThreadingTCPServer):
         daemon_threads = True
-        allow_reuse_address = False
 
     with Server(("127.0.0.1", 0), Handler) as srv:
-        state = {"port": srv.server_address[1], "token": token, "pid": os.getpid(),
-                  "model": model, "conversation": conversation}
+        state = {"port": srv.server_address[1], "token": token, "pid": os.getpid()}
         tmp = state_file.with_suffix(".tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
         os.replace(tmp, state_file)
@@ -268,5 +245,5 @@ def serve(conversation: str, model: str, reuse_turns: int, idle_seconds: int) ->
                 pass
 
 
-if __name__ == "__main__" and len(sys.argv) >= 6 and sys.argv[1] == "serve":
-    serve(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
+if __name__ == "__main__" and len(sys.argv) >= 5 and sys.argv[1] == "serve":
+    serve(sys.argv[2], sys.argv[3], int(sys.argv[4]))

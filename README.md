@@ -25,8 +25,6 @@ tool call, whether the agent can carry on by itself. It is meant for working wit
 - **Instructions for the agent.** `rules/AGENTS.md` is added to agy's rules while the plugin
   is active: it asks the agent to prefer its own read tools over the shell and to group
   checks into a single script, so fewer actions have to wait for the judge.
-- **Circuit breaker.** If the agent keeps trying forbidden paths, the denial stands and the
-  agent is asked to change approach or stop and explain what it needs.
 
 ## Requirements
 
@@ -56,20 +54,12 @@ If it is installed in both scopes, only the project copy acts in that project: t
 doesn't run. That way you can try a new version in one project without touching the global
 one.
 
-**Pause it without uninstalling:**
+**Pause it without uninstalling** (for example, to run agy with
+`--dangerously-skip-permissions` and no auto mode):
 
 ```bash
 agy plugin disable automode
 agy plugin enable automode
-```
-
-**A session without judge or backup:** launch agy with the variable `AGY_AUTOMODE=off`.
-Anything that would go to the judge is approved instantly and no git snapshot is taken; the
-red lines still apply. It also removes the brake of the planning phase, which depends on the
-judge.
-
-```powershell
-$env:AGY_AUTOMODE = 'off'; agy
 ```
 
 **Uninstall:** `agy plugin uninstall automode`, or delete the `.agents/plugins/automode`
@@ -87,8 +77,8 @@ agy --dangerously-skip-permissions
 
 Without that option the auto mode still decides, but agy keeps asking for confirmation even
 when the hook approves the action. With it, agy honors the hook's denials and stops asking.
-If the hook itself fails (unreadable policy, a call it can't read, Python missing or older
-than 3.11), the action is denied and the reason says what to check.
+If the hook itself fails (unreadable policy, a call it can't read), the action is denied and
+the reason says what to check.
 
 **`agya` shortcut.** To avoid typing the option every time, define a shortcut that accepts the
 same arguments as `agy` (for example, `agya -c`).
@@ -128,18 +118,15 @@ expressions.
 ## Configuration
 
 All behavior lives in `policy.toml`: safe and blocked commands, sensitive paths, tools by
-level, the judge's model and time limit, the backup and the circuit breaker. The comments in
-the file explain each section.
-
-`python src/mode.py` shows the fixed mode in the policy; `python src/mode.py plan|auto`
-changes it.
+level, the judge's model and time limit, and the backup. The comments in the file explain each
+section. `[mode].active` sets the phase used when the conversation doesn't mark one.
 
 ## Where it keeps its state
 
 Each conversation keeps its state in the folder agy creates for it:
 `~/.gemini/antigravity-cli/brain/<conversation>/.agents/automode/`. It contains `audit.jsonl`
-(one line per decision, with the installation that acted in the `hook` field), the circuit
-breaker counters and the verdict cache. The agent cannot modify that folder.
+(one line per decision, with the installation that acted in the `hook` field) and the record
+of git snapshots. The agent cannot modify that folder.
 
 ## Limitations
 

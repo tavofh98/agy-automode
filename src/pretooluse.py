@@ -5,63 +5,15 @@ import re
 import sys
 import tempfile
 import time
+import tomllib
 from datetime import datetime
 
-try:
-    import tomllib
-except ImportError:
-    # Python 3.10 o anterior: sin tomllib no se puede leer la política. Se deniega con un
-    # motivo claro en vez de caer con un traceback que el agente no sabría interpretar.
-    print(json.dumps({"decision": "deny", "reason": (
-        "automode necesita Python 3.11 o superior y este es "
-        f"{sys.version.split()[0]}. Pide al usuario que actualice Python.")}))
-    sys.exit(0)
+from checkpoint import ensure_checkpoint, omitted_paths, restore_hint
+from classifier_agy import INFLIGHT_VAR, TECHNICAL_MARK, classify_with_agy
+from transcript import detect_phase, extract_user_intent, read_work_objective
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-try:
-    from transcript import detect_phase, extract_user_intent, read_work_objective
-except ImportError:
-    try:
-        from automode.transcript import detect_phase, extract_user_intent, read_work_objective
-    except ImportError:
-        def extract_user_intent(*args, **kwargs):
-            return ""
-
-        def read_work_objective(*args, **kwargs):
-            return ""
-
-        def detect_phase(*args, **kwargs):
-            return None
-
-try:
-    from checkpoint import ensure_checkpoint, omitted_paths, restore_hint
-except ImportError:
-    try:
-        from automode.checkpoint import ensure_checkpoint, omitted_paths, restore_hint
-    except ImportError:
-        def ensure_checkpoint(*args, **kwargs):
-            return False, "módulo de capturas no disponible"
-
-        def omitted_paths(*args, **kwargs):
-            return []
-
-        def restore_hint(*args, **kwargs):
-            return ""
-
-try:
-    from classifier_agy import INFLIGHT_VAR, TECHNICAL_MARK, classify_with_agy
-except ImportError:
-    try:
-        from automode.classifier_agy import INFLIGHT_VAR, TECHNICAL_MARK, classify_with_agy
-    except ImportError:
-        INFLIGHT_VAR = "AGY_AUTOMODE_INFLIGHT"
-        TECHNICAL_MARK = "[sin veredicto]"
-
-        def classify_with_agy(*args, **kwargs):
-            return "deny", f"{TECHNICAL_MARK} Clasificador agy no disponible."
-
 
 # El código vive en src/; la política y hooks.json, en la raíz del plugin.
 PLUGIN_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -220,56 +172,23 @@ def is_contained(path: str, roots: list) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cortacircuitos
-# ─────────────────────────────────────────────────────────────────────────────
-
-def counters_path() -> pathlib.Path:
-    # La carpeta de estado ya es de la conversación: el nombre no necesita el id.
-    return STATE_DIR / "counters.json"
-
-
-def read_counters() -> dict:
-    try:
-        return json.loads(counters_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {"consecutive": 0, "total": 0}
-
-
-def write_counters(data: dict) -> None:
-    try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        counters_path().write_text(
-            json.dumps(data, ensure_ascii=False), encoding="utf-8"
-        )
-    except OSError:
-        pass
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Motor de decisión
 # ─────────────────────────────────────────────────────────────────────────────
 
-def judge_disabled() -> bool:
-    """Sesión lanzada con `AGY_AUTOMODE=off`: sin juez ni captura; las líneas rojas siguen."""
-    return os.environ.get("AGY_AUTOMODE", "").strip().lower() == "off"
-
-
-def get_active_mode(policy: dict, payload: dict | None = None) -> str:
+def get_active_mode(policy: dict, payload: dict) -> str:
     """Modo vigente, por precedencia: `AGY_MODE` > lo que escribió la persona > `policy.toml`."""
     env_mode = os.environ.get("AGY_MODE", "").strip().lower()
     if env_mode in ("plan", "auto"):
         return env_mode
 
     mode_cfg = policy.get("mode", {})
-    if payload and mode_cfg.get("follow_conversation", True):
-        phase = detect_phase(
-            payload.get("transcriptPath"),
-            mode_cfg.get("plan_triggers", []),
-            mode_cfg.get("auto_triggers", []),
-        )
-        if phase in ("plan", "auto"):
-            return phase
-
+    phase = detect_phase(
+        payload.get("transcriptPath"),
+        mode_cfg.get("plan_triggers", []),
+        mode_cfg.get("auto_triggers", []),
+    )
+    if phase in ("plan", "auto"):
+        return phase
     return mode_cfg.get("active", "auto").strip().lower()
 
 
@@ -301,10 +220,8 @@ def primary_root(roots: list) -> pathlib.Path:
     return pathlib.Path(roots[0]) if roots else PLUGIN_ROOT.parent.parent
 
 
-def work_objective(payload: dict | None, policy: dict) -> str:
+def work_objective(payload: dict, policy: dict) -> str:
     """Vara del trabajo: el plan aprobado y las últimas instrucciones del usuario."""
-    if not payload:
-        return ""
     cfg = policy.get("classifier", {})
     parts = []
 
@@ -332,15 +249,10 @@ def explain_missing_backup(detail: str) -> str:
     )
 
 
-def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
-    """Captura el proyecto antes de un cambio. Devuelve (hay_respaldo, capturado, detalle)."""
-    if judge_disabled():
-        return True, False, "sesión con AGY_AUTOMODE=off"
+def guard_checkpoint(payload: dict, policy: dict, roots: list) -> tuple:
+    """Captura el proyecto antes de un cambio. Devuelve (hay_respaldo, detalle)."""
     cfg = policy.get("checkpoint", {})
-    if not cfg.get("enabled", True):
-        return True, False, "capturas desactivadas por política"
-
-    conversation_id = (payload or {}).get("conversationId") or ""
+    conversation_id = payload.get("conversationId") or ""
     ok, detail = ensure_checkpoint(
         primary_root(roots),
         conversation_id,
@@ -350,47 +262,29 @@ def guard_checkpoint(payload: dict | None, policy: dict, roots: list) -> tuple:
         max_file_bytes=int(float(cfg.get("max_file_mb", 0)) * 1024 * 1024),
         keep_last=int(cfg.get("keep_last", 0)),
     )
-    if ok:
-        hint = restore_hint(conversation_id, omitted_paths(STATE_DIR, conversation_id))
-        return True, True, f"{detail}; deshacer con `{hint}`"
-    if cfg.get("require", True):
-        return False, False, detail
-    return True, False, detail
+    if not ok:
+        return False, detail
+    hint = restore_hint(conversation_id, omitted_paths(STATE_DIR, conversation_id))
+    return True, f"{detail}; deshacer con `{hint}`"
 
 
-def classify(
-    policy: dict,
-    user_intent: str,
-    tool_name: str,
-    tool_args: dict,
-    root_dir: pathlib.Path,
-    context: dict | None = None,
-) -> tuple:
+def classify(policy: dict, user_intent: str, tool_name: str, tool_args: dict,
+             context: dict | None = None) -> tuple:
     """Consulta al juez `agy`. Ante un fallo del juez, deniega."""
-    if judge_disabled():
-        return "allow", "Sin clasificador: sesión lanzada con AGY_AUTOMODE=off."
     # La batería de pruebas pone AGY_AUTOMODE_BACKEND=none para no lanzar agy en cada caso.
     if os.environ.get("AGY_AUTOMODE_BACKEND", "").strip().lower() == "none":
-        fallback = policy.get("classifier", {}).get("on_failure", "deny")
-        return fallback, f"{TECHNICAL_MARK} Clasificador desactivado: no hay quien juzgue esta acción."
+        return "deny", f"{TECHNICAL_MARK} Clasificador desactivado: no hay quien juzgue esta acción."
     return classify_with_agy(
         user_intent=user_intent,
         tool_name=tool_name,
         tool_args=tool_args,
         policy=policy,
-        state_dir=STATE_DIR,
-        root_dir=root_dir,
         context=context,
         conversation_id=CONVERSATION_ID,
     )
 
 
-def is_technical(reason: str) -> bool:
-    """¿La denegación viene de un fallo del clasificador y no de un juicio de política?"""
-    return str(reason or "").lstrip().startswith(TECHNICAL_MARK)
-
-
-def evaluate_command(command: str, policy: dict, payload: dict | None = None) -> tuple:
+def evaluate_command(command: str, policy: dict, payload: dict) -> tuple:
     """Evalúa un comando de shell. Devuelve (decision, reason, rule)."""
     command = unwrap_quotes(command)
     blocked = policy.get("commands", {}).get("blocked", [])
@@ -417,34 +311,30 @@ def evaluate_command(command: str, policy: dict, payload: dict | None = None) ->
                     and not EMBEDDED_CODE.search(cleaned) and not UNRESOLVED_PATH.search(cleaned))
 
     all_safe = all(is_safe(segment) for segment in segments)
-    roots = (payload.get("workspacePaths") if payload else []) or []
+    roots = payload.get("workspacePaths") or []
     outside_paths = command_targets_outside(command, roots)
 
     if all_safe and not outside_paths:
         return "allow", "Todos los segmentos son comandos de solo consulta o verificación.", None
 
     # 3. Todo lo demás lo juzga el clasificador, con la fase como contexto.
-    if not policy.get("classifier", {}).get("enabled", True):
-        return "deny", f"Clasificador deshabilitado por política; comando no reconocido como seguro: {command[:120]}", None
-
-    tool_name = payload.get("toolCall", {}).get("name", "run_command") if payload else "run_command"
-    tool_args = payload.get("toolCall", {}).get("args", {}) if payload else {"CommandLine": command}
+    tool = payload.get("toolCall", {})
     rule_text = (
         f"Comando fuera del alcance de las reglas estáticas. Toca la ruta {outside_paths[:80]}, fuera del proyecto."
         if outside_paths else
         "Comando fuera del alcance de las reglas estáticas: no figura entre los seguros ni entre los bloqueados."
     )
     verdict, reason = classify(
-        policy, work_objective(payload, policy), tool_name, tool_args, primary_root(roots),
-        context={"phase": active_mode, "rule": rule_text},
+        policy, work_objective(payload, policy), tool.get("name", "run_command"),
+        tool.get("args", {}), context={"phase": active_mode, "rule": rule_text},
     )
     if verdict == "allow":
         # Un comando aprobado puede escribir o borrar: se respalda igual que una
         # edición, para que la aprobación no dependa de adivinar qué hará.
-        backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
+        backed_up, detail = guard_checkpoint(payload, policy, roots)
         if not backed_up:
             return "deny", explain_missing_backup(detail), None
-        reason = f"{reason} {'Respaldo' if captured else 'Sin respaldo'}: {detail}."
+        reason = f"{reason} Respaldo: {detail}."
     return verdict, reason, None
 
 
@@ -513,7 +403,7 @@ def decide(payload: dict, policy: dict) -> tuple:
         if not outside_paths:
             return "allow", "Lectura dentro del proyecto.", None
         verdict, reason = classify(
-            policy, work_objective(payload, policy), name, args, primary_root(roots),
+            policy, work_objective(payload, policy), name, args,
             context={"phase": active_mode,
                      "rule": f"Lectura fuera del proyecto: {outside_paths[0][:120]}"},
         )
@@ -543,7 +433,7 @@ def decide(payload: dict, policy: dict) -> tuple:
                 "planeación; no toca el proyecto."
             )
             verdict, reason = classify(
-                policy, work_objective(payload, policy), name, args, primary_root(roots),
+                policy, work_objective(payload, policy), name, args,
                 context={"phase": active_mode, "rule": rule_text},
             )
             if verdict != "allow":
@@ -553,38 +443,29 @@ def decide(payload: dict, policy: dict) -> tuple:
             # Aprobado en modo plan: sigue necesitando respaldo, como toda edición.
 
         # Sin captura posible no se modifica: "reversible" sería falso.
-        backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
+        backed_up, detail = guard_checkpoint(payload, policy, roots)
         if not backed_up:
             return "deny", explain_missing_backup(detail), None
         if not touches_project:
             return ("allow", "Escritura en el directorio de trabajo de agy (scratch), fuera del "
                     "proyecto: la captura git no la cubre.", None)
-        if captured:
-            return "allow", f"Edición dentro del proyecto, reversible: {detail}.", None
-        return ("allow", f"Edición dentro del proyecto, sin respaldo ({detail}): no se puede "
-                "deshacer con git.", None)
+        return "allow", f"Edición dentro del proyecto, reversible: {detail}.", None
 
-    # 6. Herramientas con efectos externos o no declaradas: las juzga el clasificador.
-    if policy.get("classifier", {}).get("enabled", True):
-        known = name in tools.get("always_evaluate", [])
-        verdict, reason = classify(
-            policy, work_objective(payload, policy), name, args, primary_root(roots),
-            context={"phase": active_mode,
-                     "rule": ("Herramienta con efectos externos o destructivos." if known
-                              else f"Herramienta no declarada en la política: {name}.")},
-        )
-        if verdict == "allow" and name in tools.get("destructive", []):
-            backed_up, captured, detail = guard_checkpoint(payload, policy, roots)
-            if not backed_up:
-                return "deny", explain_missing_backup(detail), None
-            reason = f"{reason} {'Respaldo' if captured else 'Sin respaldo'}: {detail}."
-        return verdict, reason, None
-
-    return "deny", f"Clasificador deshabilitado por política y herramienta no cubierta por reglas: {name}", None
+    # 6. Herramientas sin regla fija (efectos externos o no declaradas): las juzga el clasificador.
+    verdict, reason = classify(
+        policy, work_objective(payload, policy), name, args,
+        context={"phase": active_mode, "rule": f"Herramienta sin regla fija: {name}."},
+    )
+    if verdict == "allow" and name in tools.get("destructive", []):
+        backed_up, detail = guard_checkpoint(payload, policy, roots)
+        if not backed_up:
+            return "deny", explain_missing_backup(detail), None
+        reason = f"{reason} Respaldo: {detail}."
+    return verdict, reason, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Auditoría
+# Auditoría y respuesta
 # ─────────────────────────────────────────────────────────────────────────────
 
 def audit(record: dict) -> None:
@@ -600,14 +481,9 @@ def permission_overrides(payload: dict, policy: dict, decision: str) -> list:
     """Concede el comando exacto ya aprobado, para que agy no vuelva a preguntar en su modo plan."""
     if decision != "allow":
         return []
-    if not policy.get("mode", {}).get("emit_permission_overrides", True):
-        return []
     tool = (payload.get("toolCall") or {})
-    tool_name = (tool.get("name") or "").strip()
-    arg_key = policy.get("tools", {}).get("command_arg", {}).get(tool_name)
-    if not arg_key:
-        return []
-    command = (tool.get("args") or {}).get(arg_key)
+    arg_key = policy.get("tools", {}).get("command_arg", {}).get((tool.get("name") or "").strip())
+    command = (tool.get("args") or {}).get(arg_key) if arg_key else None
     if not isinstance(command, str) or not command.strip():
         return []
     return [f"command({unwrap_quotes(command)})"]
@@ -619,8 +495,6 @@ def respond(decision: str, reason: str, overrides: list | None = None) -> None:
         output["permissionOverrides"] = overrides
     print(json.dumps(output, ensure_ascii=False))
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     global STATE_DIR, CONVERSATION_ID
@@ -645,8 +519,7 @@ def main() -> int:
         policy = load_policy()
     except (OSError, ValueError) as exc:
         respond("deny", f"Política ilegible ({exc}). Pide al usuario que revise policy.toml.")
-        audit({"ts": datetime.now().isoformat(timespec="seconds"),
-               "error": f"policy: {exc}"})
+        audit({"ts": datetime.now().isoformat(timespec="seconds"), "error": f"policy: {exc}"})
         return 0
 
     STATE_DIR = resolve_state_dir(payload, policy)
@@ -656,62 +529,27 @@ def main() -> int:
         decision, reason, rule = decide(payload, policy)
     except Exception as exc:  # el hook nunca puede tumbar la sesión
         respond("deny", f"Error interno del auto mode ({exc}). Pide al usuario que lo revise.")
-        audit({"ts": datetime.now().isoformat(timespec="seconds"),
-               "error": f"decide: {exc}"})
+        audit({"ts": datetime.now().isoformat(timespec="seconds"), "error": f"decide: {exc}"})
         return 0
 
-    mode = policy.get("mode", {})
-    effective = decision
+    call = payload.get("toolCall") or {}
+    audit({
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        # Qué instalación actuó: con el plugin en un proyecto y en global a la vez,
+        # es lo único que distingue sus registros.
+        "hook": str(PLUGIN_ROOT),
+        "conversation": CONVERSATION_ID,
+        "step": payload.get("stepIdx"),
+        "tool": call.get("name"),
+        "args": call.get("args"),
+        "decision": decision,
+        "reason": reason,
+        "rule": rule,
+        # Cuánto tardó la decisión: las reglas resuelven en milisegundos, el juez en segundos.
+        "ms": int((time.monotonic() - start) * 1000),
+    })
 
-    # Cortacircuitos: insistir en caminos prohibidos es estar atascado. Los fallos técnicos
-    # del clasificador no cuentan.
-    technical = is_technical(reason)
-    conversation_id = payload.get("conversationId") or ""
-    counters = read_counters()
-    if decision == "deny" and not technical:
-        counters["consecutive"] = counters.get("consecutive", 0) + 1
-        counters["total"] = counters.get("total", 0) + 1
-    elif decision == "allow":
-        counters["consecutive"] = 0
-    write_counters(counters)
-
-    breaker = policy.get("circuit_breaker", {})
-    # No escala a `force_ask` (agy lo ejecuta sin preguntar): mantiene la denegación y pide
-    # parar. El total se reinicia al dispararse para no bloquear el resto de la sesión.
-    total_exhausted = counters.get("total", 0) >= breaker.get("total_denials", 20)
-    if decision == "deny" and not technical and (
-            counters.get("consecutive", 0) >= breaker.get("consecutive_denials", 3)
-            or total_exhausted):
-        reason = (
-            f"Cortacircuitos activado ({counters['consecutive']} denegaciones seguidas, "
-            f"{counters['total']} en la sesión): {reason} No insistas por esta vía; "
-            "cambia de enfoque o detente y explica al usuario qué necesitas."
-        )
-        if total_exhausted:
-            counters["total"] = 0
-            write_counters(counters)
-
-    if effective != "allow" or mode.get("audit_allow", True):
-        call = payload.get("toolCall") or {}
-        audit({
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            # Qué instalación actuó: con el plugin en un proyecto y en global a la vez,
-            # es lo único que distingue sus registros.
-            "hook": str(PLUGIN_ROOT),
-            "conversation": conversation_id,
-            "step": payload.get("stepIdx"),
-            "tool": call.get("name"),
-            "args": call.get("args"),
-            "technical": technical,
-            "decision": decision,
-            "effective": effective,
-            "reason": reason,
-            "rule": rule,
-            # Cuánto tardó la decisión: las reglas resuelven en milisegundos, el juez en segundos.
-            "ms": int((time.monotonic() - start) * 1000),
-        })
-
-    respond(effective, reason, permission_overrides(payload, policy, effective))
+    respond(decision, reason, permission_overrides(payload, policy, decision))
     return 0
 
 

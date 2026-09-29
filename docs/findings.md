@@ -8,14 +8,14 @@ What isn't code but explains why the code is the way it is.
 - Output on stdout, only the decision JSON: `{"decision": "allow"|"deny", "reason"}`. All diagnostics go to the audit log.
 - With `--dangerously-skip-permissions`, agy honors the hook's `deny` but **runs `ask` without asking**. That is why there is no `ask` verdict, and why any internal hook error denies.
 - If the hook can't run (Python missing, command not found), agy blocks the action (measured with agy 1.2.11).
-- `force_ask` also runs without asking: the circuit breaker keeps the denial instead of escalating.
+- `force_ask` also runs without asking.
 - In agy's plan mode, an `allow` from the hook isn't always enough and agy asks again; `permissionOverrides: ["command(<exact command>)"]` prevents it without granting anything broader.
 - agy runs the hook command from the folder that contains `hooks.json`, which is why `hooks.json` calls `python src/pretooluse.py`.
 
 ## Judge
 
 - It only sees the user's intent, the approved plan and the action: never the agent's reasoning, which is the defense against persuasion.
-- `--json-schema` doesn't enforce the format in print mode (re-measured: prose came back with `status: "SUCCESS"`): the JSON relies on a strict prompt and a tolerant extractor. When in doubt, `deny` marked as a technical failure, which doesn't count for the circuit breaker.
+- `--json-schema` doesn't enforce the format in print mode (re-measured: prose came back with `status: "SUCCESS"`): the JSON relies on a strict prompt and a tolerant extractor. When in doubt, `deny` marked as a technical failure (`[sin veredicto]`).
 - Recursion: the nested agy runs with `AGY_AUTOMODE_INFLIGHT=1` in a temporary folder outside any workspace. Both defenses are needed, because agy also loads a global `hooks.json` from `~/.gemini/config/`.
 - The judge runs as its own agent with no tools (`--agent automode-judge`, defined in `.agents/agents/` of its temporary folder). Without it, agy adds its own system prompt and tools: ~12,700 tokens per check versus ~2,700, with the same verdicts. `tools: []` must be written out: without the field, agy loads default tools (~5,500).
 - If the agent can't be loaded (wrong name, missing `description`, invalid `model`), agy silently falls back to its default agent: exit code 0 and `status: "SUCCESS"`. Only its log says so (`Agent "<name>" not found, falling back to default`).
@@ -41,5 +41,5 @@ What isn't code but explains why the code is the way it is.
 - Each action is judged by a new agy, already started, which is discarded after answering: no judgment sees the previous ones. Median latency ~2.3 s versus ~5.5 s cold.
 - The input format of `agy --input-format stream-json` isn't documented: `{"event": "user", "message": {"content": "..."}}`, with an empty `--print=` and `--output-format stream-json`. `/clear` doesn't exist in print mode, so there is no way to empty the memory of a live agy.
 - One helper per conversation, never shared: the same action can be valid in one conversation and not in another (`python simulador.py` is approved in the simulator's conversation and denied in the email one).
-- Channel: `127.0.0.1` only, a per-conversation secret in `~/.gemini/automode/<conversation>/` and HMAC-signed replies. If the helper fails, the action is judged cold.
+- Channel: `127.0.0.1` only, with a per-conversation token in `~/.gemini/automode/<conversation>/`. If the helper fails, the action is judged cold. Signed replies were dropped (2026-09-28): the client sent the token in clear, so the signature protected nothing.
 - Its own working folder: if it inherits the hook's, Windows won't let you delete or rename the project while the helper is alive.

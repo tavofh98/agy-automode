@@ -8,11 +8,6 @@ active = "auto"
 
 # La fase se deduce de lo que escribe la persona (`/plan`, frase de aprobación).
 # Precedencia: AGY_MODE > conversación > `active`.
-follow_conversation = true
-
-# Acompaña cada `allow` de un comando con `permissionOverrides` del comando exacto, para que
-# agy no vuelva a preguntar en su modo plan.
-emit_permission_overrides = true
 
 # Vuelven a la fase de planeación. Se comparan contra el mensaje en minúsculas.
 plan_triggers = [
@@ -33,31 +28,18 @@ auto_triggers = [
   '\bswitch\s+to\s+auto(?:matic)?\s+mode\b',
 ]
 
-# Registrar también las decisiones `allow`. Ocupa más disco pero es lo que permite
-# medir qué porcentaje de acciones se resuelve solo y afinar las reglas.
-audit_allow = true
-
 
 [classifier]
 # Juez para lo que las reglas no resuelven, en ambos modos. Veredicto binario: allow o deny
-# (ver docs/findings.md sobre por qué no existe `ask`).
-enabled = true
-
-# Si el juez no puede pronunciarse (timeout, salida ilegible): deniega, sin contar para el cortacircuitos.
-on_failure = "deny"
-
-# El clasificador lanza el propio `agy` en modo print, con la sesión ya autenticada de la
-# máquina. Cuesta ~5 s por llamada no cacheada.
+# (ver docs/findings.md sobre por qué no existe `ask`). Si no puede pronunciarse, deniega.
+# Usa el propio `agy`, con la sesión ya autenticada de la máquina.
 [classifier.agy]
 model = "gemini-3.8-flash-low"
 # Margen amplio a propósito: es preferible esperar a caer en `ask` por impaciencia.
 timeout_seconds = 30
-binary = "agy"
 
 # Juez precargado (judge_pool.py): un agy ya arrancado por conversación; si falla, se juzga en frío.
 persistent = true
-# Consultas por juez antes de descartarlo. Con 1, ningún juicio recuerda los anteriores.
-reuse_turns = 1
 # El auxiliar se apaga tras este tiempo sin acciones juzgadas.
 idle_seconds = 900
 
@@ -67,14 +49,10 @@ plan_root = "~/.gemini/antigravity-cli/brain"
 plan_max_chars = 4000
 
 
-
 [checkpoint]
 # Captura git del proyecto antes del primer cambio de cada bloque de trabajo, en
 # refs/automode/<conversación>, sin tocar la rama ni el índice. Respeta .gitignore.
-enabled = true
-
-# Sin captura posible (p. ej. sin repositorio git), `true` deniega la edición; `false` la permite.
-require = true
+# Sin captura posible (p. ej. sin repositorio git), la edición se deniega.
 
 # No se recaptura dentro de este intervalo: el objetivo es poder volver al inicio del
 # bloque de trabajo, no versionar cada paso.
@@ -86,12 +64,6 @@ max_file_mb = 10
 # Capturas que se conservan: las de las últimas N conversaciones. Sin límite, cada
 # conversación deja una para siempre y `.git` solo crece. 0 las conserva todas.
 keep_last = 20
-
-
-[circuit_breaker]
-# Si el agente insiste en caminos prohibidos, se mantiene la denegación y se le pide parar.
-consecutive_denials = 3
-total_denials = 20
 
 
 [tools]
@@ -117,19 +89,7 @@ write = [
   "write_to_file", "replace_file_content",
 ]
 
-# Nivel 3 — efectos externos o destructivos. Nunca se aprueban solas.
-# Las que ejecutan comandos pasan además por el análisis de [commands].
-always_evaluate = [
-  "run_command", "send_command_input", "shell_exec", "execute_notebook",
-  "run_extension_code", "git_commit", "delete_directory", "move",
-  "invoke_subagent", "browser_subagent", "execute_browser_javascript",
-  # Subagentes y mensajes entre agentes: salida de información, se juzga contra la tarea.
-  "manage_subagents", "define_subagent", "send_message",
-  "open_browser_url", "read_url_content", "search_web", "mcp_tool",
-  "cloud_sql_execute_sql", "cloud_sql_update_schema", "set_up_cloud_sql",
-  "deploy_firebase", "set_up_firebase",
-  "install_applet_dependencies", "install_applet_package",
-]
+# Cualquier otra herramienta la juzga el clasificador.
 
 # Herramientas que borran o mueven: aunque el juez las apruebe, antes se captura el proyecto.
 destructive = [
@@ -162,7 +122,7 @@ sensitive = [
   '(^|[/\\])credentials\.json$',
   '(^|[/\\])google_accounts\.json$',
   '(^|[/\\])\.git-credentials$',
-  # Secreto del juez precargado: quien lo lea podría firmar veredictos falsos.
+  # Estado del juez precargado (puerto y token).
   '(^|[/\\])\.gemini[/\\]automode([/\\]|$)',
 ]
 
@@ -174,7 +134,7 @@ self_protected = [
   '(?:^|[\s/\\])\.agents(?:[/\\]|$)',
   # Instalación global del auto mode (y del resto de la configuración global de agy).
   '(?:^|[\s/\\])\.gemini[/\\]config(?:[/\\]|$)',
-  # Estado del juez precargado, con el secreto que autentica sus veredictos.
+  # Estado del juez precargado.
   '(?:^|[\s/\\])\.gemini[/\\]automode(?:[/\\]|$)',
 ]
 
@@ -188,8 +148,6 @@ credential_terms = [
 extra_write_roots = [
   '~/.gemini/antigravity-cli/brain',
 ]
-
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -273,16 +231,11 @@ reason = "Publica un paquete. Es irreversible y de alcance público."
 
 # ── b) Degradar la postura de seguridad ──────────────────────────────────────
 [[commands.blocked]]
-pattern = '>>?\s*[^|;&]*authorized_keys|ssh-copy-id\b'
-reason = "Añade acceso SSH persistente."
-
-[[commands.blocked]]
-# `at` solo como comando: al inicio de un segmento y seguido de una hora o un equipo.
-pattern = '\b(?:crontab|schtasks)\b|(?:^|[;&|\n"\x27(]\s*)at\s+(?:\d|\\\\)|New-ScheduledTask'
+pattern = '\bschtasks\b|New-ScheduledTask'
 reason = "Crea ejecución programada persistente."
 
 [[commands.blocked]]
-pattern = '\bchmod\s+(?:-R\s+)?777\b|Set-ExecutionPolicy\s+(?:Bypass|Unrestricted)'
+pattern = 'Set-ExecutionPolicy\s+(?:Bypass|Unrestricted)'
 reason = "Relaja permisos del sistema."
 
 [[commands.blocked]]
@@ -298,19 +251,11 @@ reason = "Descarga y ejecuta código remoto sin inspección previa."
 pattern = '(?:grep|rg|findstr|Select-String)\b[^|;&]*(?:API_KEY|SECRET|TOKEN|PASSWORD|PRIVATE_KEY|CREDENTIAL)'
 reason = "Búsqueda de credenciales. Si necesitas una, pídela explícitamente."
 
-# ── d) Eludir revisión o afectar recursos compartidos ────────────────────────
+# ── d) Eludir revisión o destruir datos ────────────────────────
 [[commands.blocked]]
 pattern = '\s(?:--no-verify|--skip-verification|--skip-checks|--allow-unrelated-histories)\b'
 reason = "Elude una verificación de seguridad. Si la verificación falló, corrige la causa."
 
 [[commands.blocked]]
-pattern = '\bkubectl\s+(?:delete|drain)\b|\bterraform\s+(?:apply|destroy)\b'
-reason = "Modifica infraestructura compartida."
-
-[[commands.blocked]]
 pattern = '\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|SCHEMA)\b|\bDELETE\s+FROM\b(?![^|;&]*\bWHERE\b)'
 reason = "Operación destructiva de base de datos."
-
-[[commands.blocked]]
-pattern = '\bdocker\s+(?:system\s+prune|volume\s+rm)|\bdocker\s+rm\s+-f'
-reason = "Elimina recursos de Docker que pueden estar en uso."
