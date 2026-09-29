@@ -1,41 +1,45 @@
-# Hallazgos y decisiones de diseño
+# Findings and design decisions
 
-Lo que no es código pero explica por qué el código es así.
+What isn't code but explains why the code is the way it is.
 
-## Contrato del hook con agy
+## Hook contract with agy
 
-- Entrada por stdin: `{"toolCall": {"name", "args"}, "stepIdx", "conversationId", "workspacePaths", "transcriptPath"}`.
-- Salida por stdout, solo el JSON de decisión: `{"decision": "allow"|"deny", "reason"}`. Todo diagnóstico va al registro de auditoría.
-- Con `--dangerously-skip-permissions`, agy respeta el `deny` del hook pero **ejecuta el `ask` sin preguntar**. Por eso no existe el veredicto `ask`, y cualquier error interno del hook deniega.
-- Si el hook no puede ejecutarse (Python ausente, comando inexistente), agy bloquea la acción (medido con agy 1.2.11).
-- `force_ask` también se ejecuta sin preguntar: el cortacircuitos mantiene la denegación en vez de escalar.
-- En el modo plan de agy, un `allow` del hook no siempre basta y agy vuelve a preguntar; `permissionOverrides: ["command(<comando exacto>)"]` lo evita sin conceder nada más amplio.
+- Input on stdin: `{"toolCall": {"name", "args"}, "stepIdx", "conversationId", "workspacePaths", "transcriptPath"}`.
+- Output on stdout, only the decision JSON: `{"decision": "allow"|"deny", "reason"}`. All diagnostics go to the audit log.
+- With `--dangerously-skip-permissions`, agy honors the hook's `deny` but **runs `ask` without asking**. That is why there is no `ask` verdict, and why any internal hook error denies.
+- If the hook can't run (Python missing, command not found), agy blocks the action (measured with agy 1.2.11).
+- `force_ask` also runs without asking: the circuit breaker keeps the denial instead of escalating.
+- In agy's plan mode, an `allow` from the hook isn't always enough and agy asks again; `permissionOverrides: ["command(<exact command>)"]` prevents it without granting anything broader.
+- agy runs the hook command from the folder that contains `hooks.json`, which is why `hooks.json` calls `python src/pretooluse.py`.
 
-## Juez
+## Judge
 
-- Solo ve la intención del usuario, el plan aprobado y la acción: nunca el razonamiento del agente, que es la defensa contra la persuasión.
-- `--json-schema` no fuerza el formato en modo print: el JSON se sostiene con un prompt estricto y un extractor tolerante. Ante cualquier duda, `deny` marcado como fallo técnico, que no cuenta para el cortacircuitos.
-- Recursión: el agy anidado corre con `AGY_AUTOMODE_INFLIGHT=1` y en un directorio temporal fuera de todo workspace. Hacen falta las dos defensas, porque agy también carga un `hooks.json` global de `~/.gemini/config/`.
-- El juez corre como agente propio sin herramientas (`--agent automode-judge`, definido en `.agents/agents/` de su carpeta temporal). Sin él, agy añade su prompt de sistema y sus herramientas: ~12.700 tokens por consulta frente a ~2.700, con los mismos veredictos. Hay que escribir `tools: []`: sin el campo, agy carga herramientas por defecto (~5.500).
-- Latencia en Windows: ~4 s de arranque del binario y ~2 s de modelo. Lo que cuenta es el arranque, no el tamaño del prompt: con el agente propio, la mediana del juez en frío solo baja de 6,6 a 5,5 s.
+- It only sees the user's intent, the approved plan and the action: never the agent's reasoning, which is the defense against persuasion.
+- `--json-schema` doesn't enforce the format in print mode (re-measured: prose came back with `status: "SUCCESS"`): the JSON relies on a strict prompt and a tolerant extractor. When in doubt, `deny` marked as a technical failure, which doesn't count for the circuit breaker.
+- Recursion: the nested agy runs with `AGY_AUTOMODE_INFLIGHT=1` in a temporary folder outside any workspace. Both defenses are needed, because agy also loads a global `hooks.json` from `~/.gemini/config/`.
+- The judge runs as its own agent with no tools (`--agent automode-judge`, defined in `.agents/agents/` of its temporary folder). Without it, agy adds its own system prompt and tools: ~12,700 tokens per check versus ~2,700, with the same verdicts. `tools: []` must be written out: without the field, agy loads default tools (~5,500).
+- If the agent can't be loaded (wrong name, missing `description`, invalid `model`), agy silently falls back to its default agent: exit code 0 and `status: "SUCCESS"`. Only its log says so (`Agent "<name>" not found, falling back to default`).
+- Latency on Windows: ~4 s to start the binary and ~2 s for the model. Startup is what counts, not prompt size: with the custom agent, the cold judge's median only drops from 6.6 to 5.5 s.
 
-## Capturas git
+## Git snapshots
 
-- Índice temporal (`GIT_INDEX_FILE`) que parte de una copia del índice de la persona: no toca su índice, rama, stash ni carpeta de trabajo. El commit no tiene padre y solo lo alcanza `refs/automode/<conversación>`.
-- Respeta `.gitignore` y excluye siempre las rutas sensibles: se vio un `.env` copiado en todas las capturas de un repositorio que no lo ignoraba.
-- Lo que la captura omite (credenciales, archivos de más de `max_file_mb`) queda excluido de la orden de restauración: una captura sin esa entrada haría que `git restore -- .` borrase el archivo.
-- `/rewind` de agy solo deshace lo que agy edita con sus herramientas, no lo que borra un comando de shell: la captura es la única red para esos casos.
+- A temporary index (`GIT_INDEX_FILE`) that starts as a copy of the user's index: it doesn't touch their index, branch, stash or working folder. The commit has no parent and is only reachable from `refs/automode/<conversation>`.
+- It honors `.gitignore` and always excludes sensitive paths: a `.env` was seen copied into every snapshot of a repository that didn't ignore it.
+- Whatever the snapshot leaves out (credentials, files larger than `max_file_mb`) is excluded from the restore command: a snapshot without that entry would make `git restore -- .` delete the file.
+- agy's `/rewind` only undoes what agy edits with its own tools, not what a shell command deletes: the snapshot is the only safety net for those cases.
 
-## Intención del usuario
+## User intent and phase
 
-- Se extraen solo los mensajes auténticos del usuario del transcript (`USER_EXPLICIT`, `USER_INPUT`); se descarta el razonamiento, las salidas de herramientas y las respuestas del modelo.
-- Cuando hay un plan aprobado en `brain/<conversationId>/`, ese plan es la vara del trabajo, no los últimos mensajes sueltos.
-- El payload del hook no dice en qué modo está agy, y el tipo de paso `PLANNER_RESPONSE` aparece incluso sin `/plan`: la fase se deduce del último `/plan` o frase de aprobación que escribió la persona.
+- Only the user's own messages are taken from the transcript (`USER_EXPLICIT`, `USER_INPUT`); reasoning, tool outputs and model replies are discarded.
+- When there is an approved plan in `brain/<conversationId>/`, that plan is the yardstick for the work, not the latest loose messages.
+- The hook payload doesn't say which mode agy is in, and the `PLANNER_RESPONSE` step type shows up even without `/plan`: the phase is inferred from the last `/plan` or approval phrase the user typed.
+- The phase must be known before deciding, because it changes the rule: in plan, editing project code goes to the judge; in execution, it is approved with a snapshot first.
+- Approval works by fixed phrases (regular expressions in `policy.toml`, Spanish and English), a choice from the first version. A plain «yes» or «approved» doesn't count. Letting the judge interpret free-form approvals was considered and rejected (2026-09-28): asking inside the same check as an edit mixes in text written by the agent, and a false approval opens the whole execution phase; a separate check per message adds time and complexity for a small gain. `/auto` is the unambiguous way out.
 
-## Juez precargado
+## Pre-started judge
 
-- Cada acción la juzga un agy nuevo, ya arrancado, que se descarta al responder: ningún juicio ve los anteriores. Latencia mediana ~2,3 s frente a ~5,5 s en frío.
-- El formato de entrada de `agy --input-format stream-json` no está documentado: `{"event": "user", "message": {"content": "..."}}`, con `--print=` vacío y `--output-format stream-json`. `/clear` no existe en modo print, así que no hay forma de vaciar la memoria de un agy vivo.
-- Un auxiliar por conversación, nunca compartido: la misma acción puede ser válida en una conversación y no en otra (`python simulador.py` se aprueba en la del simulador y se deniega en la de los correos).
-- Canal: solo `127.0.0.1`, secreto por conversación en `~/.gemini/automode/<conversación>/` y respuestas firmadas con HMAC. Si el auxiliar falla, la acción se juzga en frío.
-- Carpeta de trabajo propia: si hereda la del hook, Windows no deja borrar ni renombrar el proyecto mientras el auxiliar vive.
+- Each action is judged by a new agy, already started, which is discarded after answering: no judgment sees the previous ones. Median latency ~2.3 s versus ~5.5 s cold.
+- The input format of `agy --input-format stream-json` isn't documented: `{"event": "user", "message": {"content": "..."}}`, with an empty `--print=` and `--output-format stream-json`. `/clear` doesn't exist in print mode, so there is no way to empty the memory of a live agy.
+- One helper per conversation, never shared: the same action can be valid in one conversation and not in another (`python simulador.py` is approved in the simulator's conversation and denied in the email one).
+- Channel: `127.0.0.1` only, a per-conversation secret in `~/.gemini/automode/<conversation>/` and HMAC-signed replies. If the helper fails, the action is judged cold.
+- Its own working folder: if it inherits the hook's, Windows won't let you delete or rename the project while the helper is alive.

@@ -463,6 +463,10 @@ def test_phase_detection() -> list[str]:
         ("replan", ["/plan A", "ejecutalo en modo automatico", "/plan Replanteemos"], "plan"),
         ("slash_auto", ["/plan A", "/auto"], "auto"),
         ("unmarked", ["Revisa los datos de la base"], None),
+        ("approved_en", ["/plan I want a data tool", "Approved, go ahead"], "auto"),
+        ("auto_mode_en", ["/plan A", "Run it in auto mode"], "auto"),
+        ("not_approved_en", ["/plan A", "Not approved yet, keep planning"], "plan"),
+        ("question_en", ["/plan A", "How does auto mode work?"], "plan"),
     ]
     for name, messages, expected in scenarios:
         got = detect_phase(write_transcript(messages, name), mode_cfg["plan_triggers"], mode_cfg["auto_triggers"])

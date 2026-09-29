@@ -117,7 +117,7 @@ the legitimate route (for example: run `git init` first, or ask the user to appr
 Always return JSON adhering strictly to:
 {
   "decision": "allow" | "deny",
-  "reason": "<one concise sentence in Spanish explaining why>"
+  "reason": "<one concise sentence explaining why>"
 }
 """
 

@@ -27,6 +27,10 @@ auto_triggers = [
   '\bejec[uú]ta(?:lo)?\s+en\s+(?:modo\s+)?autom[aá]tico\b',
   '\baprobado[,:]?\s+ejec[uú]ta\b',
   '\bmodo\s+autom[aá]tico\b',
+  '\bapproved[,:]?\s+(?:go\s+ahead|proceed|execute|run\s+it)\b',
+  '\bplan\s+approved\b',
+  '\b(?:run|execute)\s+it\s+in\s+auto(?:matic)?\s+mode\b',
+  '\bswitch\s+to\s+auto(?:matic)?\s+mode\b',
 ]
 
 # Registrar también las decisiones `allow`. Ocupa más disco pero es lo que permite

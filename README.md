@@ -1,144 +1,166 @@
-# automode — auto mode para agy
+# automode — auto mode for agy
 
-Plugin para [Antigravity CLI](https://antigravity.google) (`agy`) que decide, antes de cada
-llamada a herramienta, si el agente puede seguir solo. Pensado para trabajar con
-`--dangerously-skip-permissions` sin quedar a ciegas:
+A plugin for [Antigravity CLI](https://antigravity.google) (`agy`) that decides, before every
+tool call, whether the agent can carry on by itself. It is meant for working with
+`--dangerously-skip-permissions` without flying blind:
 
-- **Reglas fijas primero.** Lecturas dentro del proyecto, comandos de consulta y pruebas se
-  aprueban al instante. Borrados masivos, `git push --force`, descargar y ejecutar código,
-  leer credenciales o tocar el propio auto mode se deniegan siempre.
-- **agy como juez de los casos dudosos.** Lo que las reglas no resuelven se consulta a
-  `agy --print` con tu plan y tus últimos mensajes delante. Sin claves ni configuración
-  aparte: usa la sesión de agy ya autenticada.
-- **Juez precargado.** Cada conversación tiene un auxiliar (`judge_pool.py`) con un agy ya
-  arrancado: cada acción juzgada tarda ~2,5 s en vez de ~6, sin memoria de las anteriores.
-  El juez corre como agente sin herramientas, así que cada consulta lee ~2.700 tokens en
-  vez de ~12.700. Se apaga tras 15 minutos sin acciones; si no responde, se juzga en frío.
-- **Fase de planeación.** Tras escribir `/plan`, las ediciones de código pasan por el juez,
-  que las deniega hasta que apruebes. Una frase de aprobación (ver más abajo) abre la fase de
-  ejecución.
-- **Respaldo antes de modificar.** Antes del primer cambio de cada bloque de trabajo guarda
-  una captura git del proyecto en `refs/automode/<conversación>`, sin tocar tu índice ni tu
-  rama. Las credenciales (`.env`, claves SSH…) quedan fuera de la captura, igual que los
-  archivos de más de 10 MB: el motivo de la aprobación los nombra y la orden para deshacer
-  los excluye. Se conservan las capturas de las últimas 20 conversaciones.
-- **Instrucciones para el agente.** `rules/AGENTS.md` se suma a las reglas de agy mientras el
-  plugin está activo: le pide preferir sus herramientas de lectura a la shell y agrupar las
-  comprobaciones en un script, para que menos acciones tengan que esperar al juez.
-- **Cortacircuitos.** Si el agente insiste en caminos prohibidos, mantiene la denegación y le
-  pide que cambie de enfoque o se detenga a explicarte qué necesita.
+- **Fixed rules first.** Reads inside the project, query commands and tests are approved
+  instantly. Mass deletions, `git push --force`, downloading and running code, reading
+  credentials or touching the auto mode itself are always denied.
+- **agy as the judge for unclear cases.** Whatever the rules don't settle is sent to
+  `agy --print` together with your plan and your latest messages. No keys or extra setup: it
+  uses your already authenticated agy session.
+- **Pre-started judge.** Each conversation has a helper process (`src/judge_pool.py`) that
+  keeps an agy already started: each judged action takes ~2.5 s instead of ~6, with no memory
+  of the previous ones. The judge runs as an agent with no tools, so each check reads ~2,700
+  tokens instead of ~12,700. The helper shuts down after 15 minutes without actions; if it
+  doesn't answer, the action is judged cold.
+- **Planning phase.** After you type `/plan`, code edits go through the judge, which denies
+  them until you approve. An approval phrase (see below) opens the execution phase.
+- **Backup before changes.** Before the first change of each block of work it stores a git
+  snapshot of the project in `refs/automode/<conversation>`, without touching your index or
+  your branch. Credentials (`.env`, SSH keys…) are left out of the snapshot, as are files
+  larger than 10 MB: the approval reason names them and the undo command excludes them.
+  Snapshots from the last 20 conversations are kept.
+- **Instructions for the agent.** `rules/AGENTS.md` is added to agy's rules while the plugin
+  is active: it asks the agent to prefer its own read tools over the shell and to group
+  checks into a single script, so fewer actions have to wait for the judge.
+- **Circuit breaker.** If the agent keeps trying forbidden paths, the denial stands and the
+  agent is asked to change approach or stop and explain what it needs.
 
-## Requisitos
+## Requirements
 
-- `agy` instalado y autenticado.
-- Python 3.11 o superior, disponible como `python`.
-- git, y que el proyecto sea un repositorio. Si no lo es, el auto mode deniega las ediciones
-  y le indica al agente que ejecute `git init`.
+- `agy` installed and authenticated.
+- Python 3.11 or later, available as `python`.
+- git, and the project must be a repository. If it isn't, the auto mode denies edits and
+  tells the agent to run `git init`.
 
-## Instalación
+## Installation
 
-El mismo repositorio sirve para los dos ámbitos.
+The same repository works for both scopes.
 
-**En un proyecto** (para probarlo):
+**In a project** (to try it out):
 
 ```bash
-git clone <url-de-este-repo> .agents/plugins/automode
+git clone <this-repo-url> .agents/plugins/automode
 ```
 
-**Global** (para todos tus proyectos):
+**Global** (for all your projects):
 
 ```bash
-git clone <url-de-este-repo> agy-automode
+git clone <this-repo-url> agy-automode
 agy plugin install agy-automode
 ```
 
-Si está instalado en los dos ámbitos, en ese proyecto actúa solo la copia del proyecto: la
-global no se ejecuta. Así puedes probar una versión nueva en un proyecto sin tocar la global.
+If it is installed in both scopes, only the project copy acts in that project: the global one
+doesn't run. That way you can try a new version in one project without touching the global
+one.
 
-**Pausarlo sin desinstalar:**
+**Pause it without uninstalling:**
 
 ```bash
 agy plugin disable automode
 agy plugin enable automode
 ```
 
-**Una sesión sin juez ni respaldo:** lanza agy con la variable `AGY_AUTOMODE=off`. Lo que
-iría al juez se aprueba al instante y no se hace captura git; las líneas rojas se siguen
-aplicando. También deja sin freno la fase de planeación, que depende del juez.
+**A session without judge or backup:** launch agy with the variable `AGY_AUTOMODE=off`.
+Anything that would go to the judge is approved instantly and no git snapshot is taken; the
+red lines still apply. It also removes the brake of the planning phase, which depends on the
+judge.
 
 ```powershell
 $env:AGY_AUTOMODE = 'off'; agy
 ```
 
-**Desinstalar:** `agy plugin uninstall automode`, o borra la carpeta `.agents/plugins/automode`.
+**Uninstall:** `agy plugin uninstall automode`, or delete the `.agents/plugins/automode`
+folder.
 
-> En Linux o macOS, si solo tienes `python3`, cambia `python` por `python3` en `hooks.json`.
+> On Linux or macOS, if you only have `python3`, change `python` to `python3` in `hooks.json`.
 
-## Uso
+## Usage
 
-Lanza agy con `--dangerously-skip-permissions`:
+Launch agy with `--dangerously-skip-permissions`:
 
 ```bash
 agy --dangerously-skip-permissions
 ```
 
-Sin esa opción el auto mode decide igual, pero agy te sigue pidiendo confirmación aunque el
-hook apruebe la acción. Con ella, agy respeta las denegaciones del hook y deja de preguntar.
-Si el propio hook falla (política ilegible, llamada que no puede leer, Python ausente o
-anterior a 3.11), la acción se deniega y el motivo dice qué revisar.
+Without that option the auto mode still decides, but agy keeps asking for confirmation even
+when the hook approves the action. With it, agy honors the hook's denials and stops asking.
+If the hook itself fails (unreadable policy, a call it can't read, Python missing or older
+than 3.11), the action is denied and the reason says what to check.
 
-**Atajo `agya`.** Para no escribir la opción cada vez, define un atajo que acepta los mismos
-argumentos que `agy` (por ejemplo, `agya -c`).
+**`agya` shortcut.** To avoid typing the option every time, define a shortcut that accepts the
+same arguments as `agy` (for example, `agya -c`).
 
-En PowerShell, añade esta línea a tu perfil (`notepad $PROFILE`):
+In PowerShell, add this line to your profile (`notepad $PROFILE`):
 
 ```powershell
 function agya { agy --dangerously-skip-permissions @args }
 ```
 
-Si al abrir PowerShell aparece «la ejecución de scripts está deshabilitada», permite tus
-scripts locales una sola vez:
+If PowerShell says "running scripts is disabled on this system" when it opens, allow your
+local scripts once:
 
 ```powershell
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-En bash o zsh, añade a `~/.bashrc` o `~/.zshrc`:
+In bash or zsh, add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 alias agya='agy --dangerously-skip-permissions'
 ```
 
-## Fases: planear y ejecutar
+## Phases: planning and execution
 
-La fase se deduce de lo que escribes:
+With no special message, the plugin works in the execution phase. The phase is inferred from
+what you type:
 
-| Escribes | Fase |
+| You type | Phase |
 |---|---|
-| `/plan …` o «volvamos a planear» | Planeación: se lee y explora libremente; las ediciones pasan por el juez |
-| `/auto`, «aprobado, ejecuta», «ejecútalo en modo automático» o «modo automático» | Ejecución: las ediciones dentro del proyecto se aprueban, con respaldo previo |
+| `/plan …` or «volvamos a planear» | Planning: reading and exploring are free; edits go through the judge |
+| `/auto`, «approved, go ahead», «plan approved», «run it in auto mode», «switch to auto mode», «aprobado, ejecuta», «ejecútalo en modo automático» or «modo automático» | Execution: edits inside the project are approved, with a backup first |
 
-Las frases se configuran en `policy.toml` (`[mode].plan_triggers` y `auto_triggers`).
+The phrases are set in `policy.toml` (`[mode].plan_triggers` and `auto_triggers`) as regular
+expressions.
 
-## Configuración
+## Configuration
 
-Todo el comportamiento vive en `policy.toml`: comandos seguros y bloqueados, rutas
-sensibles, herramientas por nivel, el modelo y el tiempo límite del juez, el respaldo y el
-cortacircuitos. Los comentarios del archivo explican cada sección.
+All behavior lives in `policy.toml`: safe and blocked commands, sensitive paths, tools by
+level, the judge's model and time limit, the backup and the circuit breaker. The comments in
+the file explain each section.
 
-`python src/mode.py` muestra el modo fijo de la política; `python src/mode.py plan|auto` lo cambia.
+`python src/mode.py` shows the fixed mode in the policy; `python src/mode.py plan|auto`
+changes it.
 
-## Dónde guarda su estado
+## Where it keeps its state
 
-Cada conversación guarda su estado en la carpeta que agy crea para ella:
-`~/.gemini/antigravity-cli/brain/<conversación>/.agents/automode/`. Contiene `audit.jsonl`
-(una línea por decisión, con qué instalación actuó en el campo `hook`), los contadores del
-cortacircuitos y la caché de veredictos. El agente no puede modificar esa carpeta.
+Each conversation keeps its state in the folder agy creates for it:
+`~/.gemini/antigravity-cli/brain/<conversation>/.agents/automode/`. It contains `audit.jsonl`
+(one line per decision, with the installation that acted in the `hook` field), the circuit
+breaker counters and the verdict cache. The agent cannot modify that folder.
 
-## Pruebas
+## Limitations
+
+- **You still run agy with `--dangerously-skip-permissions`.** The hook is the only brake: if
+  the plugin is disabled or not installed, agy runs with no checks at all.
+- **Plan approval works by fixed phrases.** Only `/auto` and the phrases in the table above
+  open the execution phase. A plain «yes», «ok» or «approved» doesn't count, and the phrases
+  only exist in Spanish and English. When in doubt, use `/auto`.
+- **Each judge check costs a little quota and time:** ~2–3 s with the pre-started judge,
+  ~5–6 s when it has to start cold.
+- **The judge never sees the agent's reasoning**, only your messages, the plan and the action.
+  That is deliberate (the agent can't talk its way past it), but it also means a short reply
+  like «yes» to a question from the agent carries no context for the judge.
+- **The messages of the fixed rules and the code comments are in Spanish.** Code identifiers
+  are in English.
+- **Only tested on Windows**, with agy 1.2.12.
+
+## Tests
 
 ```bash
 python tests/selftest.py
 ```
 
-Trabaja sobre un repositorio temporal y no llama a agy.
+It works on a temporary repository and doesn't call agy.
